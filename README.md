@@ -28,6 +28,115 @@ This lets us rigorously benchmark which methods recover the truth under various 
 
 ---
 
+## Causal Grounding Module
+
+In addition to the OSRCT benchmark, this repository includes a **causal grounding module** for computing partial identification bounds on CATE under unmeasured confounding.
+
+### Overview
+
+The `causal_grounding` module implements bounds estimation following Silva's "Causal Discovery Grounding and the Naturalness Assumption":
+
+- **Leverages multi-environment data** (RCT + observational) to learn bounds on treatment effects
+- **Uses conditional independence tests** (CMI) to score covariates as potential instruments
+- **Solves linear programs** to compute partial identification bounds under naturalness assumptions
+- **Transfers bounds** from training environments to a target population
+
+### Module Structure
+
+```
+causal_grounding/
+├── __init__.py            # Public API exports
+├── estimator.py           # CausalGroundingEstimator class
+├── ci_tests.py            # Conditional independence testing (CMI)
+├── lp_solver.py           # Linear programming for bounds
+├── covariate_scoring.py   # EHS criteria for instrument selection
+├── discretize.py          # Covariate discretization
+├── train_target_split.py  # Environment splitting
+└── transfer.py            # Bound transfer methods
+```
+
+### Quick Example
+
+```python
+from causal_grounding import (
+    CausalGroundingEstimator,
+    create_train_target_split,
+    load_rct_data
+)
+import pandas as pd
+
+# Load data
+osrct_data = pd.read_csv('confounded_datasets/anchoring1/age_beta0.1_seed42.csv')
+rct_data = load_rct_data('anchoring1', 'ManyLabs1/pre-process/Manylabs1_data.pkl')
+
+# Create train/target split (hold out mturk as target)
+training_data, target_data = create_train_target_split(
+    osrct_data, rct_data, target_site='mturk'
+)
+
+# Initialize and fit estimator
+estimator = CausalGroundingEstimator(
+    epsilon=0.1,           # Naturalness tolerance
+    n_permutations=500,    # For CI tests
+    random_seed=42
+)
+estimator.fit(training_data, treatment='iv', outcome='dv')
+
+# Get CATE bounds
+bounds_df = estimator.predict_bounds()
+print(bounds_df[['z', 'cate_lower', 'cate_upper', 'width']])
+```
+
+### Key Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `epsilon` | Naturalness tolerance (0 = strict, higher = relaxed) | 0.1 |
+| `transfer_method` | How to combine bounds: `'conservative'`, `'average'`, `'weighted'` | `'conservative'` |
+| `n_permutations` | Permutations for CI testing | 500 |
+
+### Experiment Scripts
+
+| Script | Description |
+|--------|-------------|
+| `experiments/run_grounding_experiment.py` | Full grid experiments with plotting and LaTeX output |
+| `experiments/integration_test.py` | End-to-end pipeline validation (7 tests) |
+| `experiments/compare_to_baselines.py` | Compare bounds to baseline causal methods |
+| `experiments/validate_cate_coverage.py` | Validate CATE bounds against RCT ground truth |
+
+### Running Experiments
+
+```bash
+# Single experiment
+python experiments/run_grounding_experiment.py --study anchoring1 --beta 0.3
+
+# Full grid experiment
+python experiments/run_grounding_experiment.py --grid --output results/
+
+# Integration test
+python experiments/integration_test.py --study anchoring1 --beta 0.1
+
+# CATE coverage validation
+python experiments/validate_cate_coverage.py --study anchoring1 --beta 0.1
+```
+
+### Test Suite
+
+```bash
+# Run all tests (144 unit tests + 7 integration tests)
+pytest tests/test_causal_grounding/ -v
+```
+
+**Test Coverage:**
+- `test_ci_tests.py` - 21 tests for CMI and CI engine
+- `test_discretize.py` - 18 tests for covariate discretization
+- `test_estimator.py` - 32 tests for the main estimator
+- `test_lp_solver.py` - 21 tests for LP bounds
+- `test_train_target_split.py` - 19 tests for environment splitting
+- `test_transfer.py` - 33 tests for bound transfer
+
+---
+
 ## Quick Start
 
 ### Installation

@@ -33,6 +33,7 @@ from .ci_tests import (
     CITestEngine,
     compute_cmi,
     permutation_test_cmi,
+    combine_conditioning_vars,
 )
 
 from .discretize import (
@@ -78,6 +79,7 @@ __all__ = [
     'CITestEngine',
     'compute_cmi',
     'permutation_test_cmi',
+    'combine_conditioning_vars',
 
     # Preprocessing
     'discretize_covariates',
