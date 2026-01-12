@@ -1,6 +1,3 @@
-# predictive-shift
-OSRCT Benchmark: Evaluating Causal Inference Methods with Known Ground Truth from RCTs
-
 # OSRCT Benchmark
 
 **Evaluating Causal Inference Methods with Known Ground Truth from Randomized Controlled Trials**
@@ -40,6 +37,39 @@ git clone https://github.com/YOUR_USERNAME/predictive-shift.git
 cd predictive-shift
 pip install -r requirements.txt
 ```
+
+### Run Your First Evaluation
+
+```python
+import pandas as pd
+from causal_methods import CausalMethodEvaluator
+
+# Load a confounded dataset
+data = pd.read_csv('osrct_benchmark_v1.0/confounded_datasets/by_study/anchoring1/anchoring1_demo_full_beta1.0.csv')
+
+# Load ground truth ATE from the original RCT
+gt = pd.read_csv('osrct_benchmark_v1.0/ground_truth/rct_ates.csv')
+true_ate = gt[gt['study'] == 'anchoring1']['ate'].values[0]
+
+# Evaluate all methods
+evaluator = CausalMethodEvaluator()
+results = evaluator.evaluate_all(data, ground_truth_ate=true_ate, skip_causal_forest=True)
+
+# See results
+print(results[['method', 'ate', 'bias', 'covers_truth']])
+```
+
+**Output:**
+```
+              method          ate       bias  covers_truth
+0              Naive  1528.279000  -27.38700         False
+1                IPW  1553.421000   -2.24500          True
+2  Outcome Regression  1560.112000    4.44600          True
+3               AIPW  1555.890000    0.22400          True
+4                PSM  1489.234000  -66.43200         False
+```
+
+---
 
 ## Benchmark Datasets
 
@@ -221,6 +251,178 @@ Performance across all 525 datasets:
 | `causal_methods.py` | All causal inference method implementations |
 | `generate_confounded_datasets.py` | Dataset generation script |
 
+### Generate Your Own Confounded Data
 
+```python
+from osrct import OSRCTSampler, load_manylabs1_data
+
+# Load RCT data
+rct_data = load_manylabs1_data(
+    'ManyLabs1/pre-process/Manylabs1_data.pkl',
+    study_filter='anchoring1'
+)
+
+# Create sampler with custom confounding
+sampler = OSRCTSampler(
+    biasing_covariates=['resp_age', 'resp_gender'],
+    biasing_coefficients={'resp_age': 0.5, 'resp_gender': 0.8},
+    random_seed=42
+)
+
+# Generate confounded sample
+obs_data, selection_probs = sampler.sample(rct_data, treatment_col='iv')
+
+# True ATE is still the RCT difference-in-means
+# But naive estimate on obs_data will be biased
+```
+
+### Evaluate Your Own Method
+
+```python
+from causal_methods import CausalMethodEvaluator
+import pandas as pd
+
+# Your custom estimator
+def my_estimator(data, treatment_col='iv', outcome_col='dv', covariates=None):
+    # Your implementation here
+    return {
+        'method': 'my_method',
+        'ate': estimated_ate,
+        'se': standard_error,
+        'ci_lower': ate - 1.96 * se,
+        'ci_upper': ate + 1.96 * se
+    }
+
+# Evaluate on benchmark
+evaluator = CausalMethodEvaluator()
+evaluator.add_method('my_method', my_estimator)
+
+results = evaluator.evaluate_all(data, ground_truth_ate=true_ate)
+```
+
+---
+
+## Documentation
+
+- [Installation Guide](docs/installation.md)
+- [Quick Start](docs/quickstart.md)
+- [Tutorials](docs/tutorials.md)
+- [API Reference](docs/api/index.md)
+  - [OSRCT Sampler](docs/api/osrct.md)
+  - [Causal Methods](docs/api/causal_methods.md)
+  - [Evaluation Utilities](docs/api/evaluation.md)
+  - [Continuous Treatments](docs/api/continuous_treatments.md)
+
+---
+
+## Original Paper Code
+
+This repository also contains reproduction code for:
+
+**"Beyond reweighting: On the predictive role of covariate shift in effect generalization"**
+Ying Jin, Naoki Egami, Dominik Rothenhäusler
 [arXiv:2412.08869](https://arxiv.org/abs/2412.08869)
 
+### Paper Code Structure
+
+```
+├── master.R                 # Main workflow script
+├── ManyLabs1/
+│   ├── pre-process/         # Data preprocessing
+│   ├── explanatory/         # Distribution shift analysis
+│   ├── predictive/          # Shift measures
+│   └── generalization/      # KL-based prediction intervals
+├── Pipeline/                # Pipeline dataset analysis
+├── summary/                 # Cross-dataset analyses
+└── plots_main.R             # Figure generation
+```
+
+### Run Paper Analysis (R)
+
+```r
+ROOT_DIR <- "/path/to/predictive-shift"
+source("master.R")
+```
+
+---
+
+## Citation
+
+### OSRCT Benchmark
+
+```bibtex
+@misc{osrct_benchmark_2025,
+  title={OSRCT Benchmark: Evaluating Causal Inference Methods with Known Ground Truth},
+  author={OSRCT Benchmark Contributors},
+  year={2025},
+  url={https://github.com/YOUR_USERNAME/predictive-shift}
+}
+```
+
+### Original Paper
+
+```bibtex
+@article{jin2024beyond,
+  title={Beyond reweighting: On the predictive role of covariate shift in effect generalization},
+  author={Jin, Ying and Egami, Naoki and Rothenh{\"a}usler, Dominik},
+  journal={arXiv preprint arXiv:2412.08869},
+  year={2024}
+}
+```
+
+### OSRCT Algorithm
+
+```bibtex
+@inproceedings{gentzel2021osrct,
+  title={The Case for Evaluating Causal Models Using Controlled Experiments},
+  author={Gentzel, Michael and Garant, Dan and Jensen, David},
+  booktitle={NeurIPS},
+  year={2021}
+}
+```
+
+### ManyLabs1 Data
+
+```bibtex
+@article{klein2014manylabs,
+  title={Investigating Variation in Replicability: A "Many Labs" Replication Project},
+  author={Klein, Richard A and others},
+  journal={Social Psychology},
+  volume={45},
+  pages={142--152},
+  year={2014}
+}
+```
+
+---
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Reporting bugs
+- Submitting new causal methods
+- Adding datasets
+- Improving documentation
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## Acknowledgments
+
+- Diana Da In Le for ManyLabs1 data pre-processing code
+- ManyLabs1 Project for original RCT data
+- Gentzel et al. for the OSRCT algorithm
+- All contributors to the benchmark
+
+---
+
+## Links
+
+- [Paper: Beyond Reweighting](https://arxiv.org/abs/2412.08869)
+- [Awesome Replicability Data](https://github.com/ying531/awesome-replicability-data)
+- [ManyLabs1 Project](https://osf.io/wx7ck/)
