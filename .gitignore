@@ -146,12 +146,10 @@ secrets.json
 *.text
 
 # =============================================================================
-# Root-level Markdown (except README.md)
+# Markdown Files (except README.md)
 # =============================================================================
-/memory.md
-/phase*_plan.md
-/README_OSRCT.md
-/phases*.md
+*.md
+!README.md
 
 # =============================================================================
 # Planning and Memory Documents
