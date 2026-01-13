@@ -174,3 +174,9 @@ osrct_benchmark_v1.0/metadata/
 # =============================================================================
 # Uncomment to exclude PDF files:
 # *.pdf
+
+# =============================================================================
+# Exceptions: Track experiment_report directory
+# =============================================================================
+!results/experiment_report/
+!results/experiment_report/*
