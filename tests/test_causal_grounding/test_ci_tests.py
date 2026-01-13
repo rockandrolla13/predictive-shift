@@ -296,8 +296,8 @@ class TestCITestEngine:
         assert 'passes_ehs' in result
         assert 'score' in result
 
-        # Check score formula
-        expected_score = result['test_i_pvalue'] * (1 - result['test_ii_pvalue'])
+        # Check score formula (CMI-based, sample-size invariant)
+        expected_score = result['test_ii_cmi'] - result['test_i_cmi']
         assert np.isclose(result['score'], expected_score, rtol=1e-10)
 
     def test_ehs_good_instrument(self):

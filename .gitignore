@@ -176,7 +176,9 @@ osrct_benchmark_v1.0/metadata/
 # *.pdf
 
 # =============================================================================
-# Exceptions: Track experiment_report directory
+# Exceptions: Track experiment_report directories
 # =============================================================================
 !results/experiment_report/
 !results/experiment_report/*
+!results/experiment_report_cmi_ranking/
+!results/experiment_report_cmi_ranking/*

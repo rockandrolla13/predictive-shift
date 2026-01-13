@@ -319,7 +319,8 @@ class CITestEngine:
             )
 
             passes_ehs = (not test_i['reject_independence']) and test_ii['reject_independence']
-            score = test_i['p_value'] * (1 - test_ii['p_value'])
+            # Use CMI-based scoring (sample-size invariant) instead of p-values
+            score = test_ii['cmi'] - test_i['cmi']
 
             return {
                 'z_a': z_a,
