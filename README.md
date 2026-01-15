@@ -535,3 +535,16 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [Paper: Beyond Reweighting](https://arxiv.org/abs/2412.08869)
 - [Awesome Replicability Data](https://github.com/ying531/awesome-replicability-data)
 - [ManyLabs1 Project](https://osf.io/wx7ck/)
+
+
+NOTE:
+
+Binary outcomes are:
+  allowedforbidden     | n=6,292 | type: strict (0/1)
+    Unique values: [0.0, 1.0]
+  gainloss             | n=6,271 | type: two-valued (1.0, 2.0)
+    Unique values: [1.0, 2.0]
+  reciprocity          | n=6,276 | type: strict (0/1)
+    Unique values: [0.0, 1.0]
+  scales               | n=5,899 | type: strict (0/1)
+    Unique values: [0.0, 1.0]

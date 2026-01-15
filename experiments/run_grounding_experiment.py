@@ -13,6 +13,8 @@ Usage:
     python experiments/run_grounding_experiment.py --mode full-grid
     python experiments/run_grounding_experiment.py --mode figures --results-dir results/
     python experiments/run_grounding_experiment.py --mode epsilon-sensitivity --study anchoring1
+    python experiments/run_grounding_experiment.py --grid --binary-only  # Only binary outcome studies
+    python experiments/run_grounding_experiment.py --all --binary-only --report  # Run + generate report
 """
 
 # =============================================================================
@@ -85,6 +87,19 @@ STUDIES = [
     'gamblerfallacy', 'sunkfallacy', 'gainloss', 'quote',
     'allowforbid', 'reciprocity', 'scaleframe', 'contact',
     'imaginedcontact', 'flagprime', 'moneypriming'
+]
+
+# Studies with binary (0/1) outcomes
+# Based on ManyLabs1 data analysis:
+#   - allowedforbidden -> allowforbid
+#   - gainloss (values 1/2, represents binary choice)
+#   - reciprocity (strict 0/1)
+#   - scales -> scaleframe (strict 0/1)
+BINARY_OUTCOME_STUDIES = [
+    'allowforbid',
+    'gainloss',
+    'reciprocity',
+    'scaleframe'
 ]
 
 PATTERNS = [
@@ -644,7 +659,8 @@ def run_experiment_sweep(
     betas: Optional[List[float]] = None,
     epsilons: Optional[List[float]] = None,
     output_dir: str = 'results',
-    verbose: bool = True
+    verbose: bool = True,
+    return_full_results: bool = False
 ) -> pd.DataFrame:
     """
     Run experiments across multiple configurations (legacy interface).
@@ -656,9 +672,10 @@ def run_experiment_sweep(
         epsilons: List of epsilon values (default: [0.1])
         output_dir: Directory for output files
         verbose: Print progress
+        return_full_results: If True, return tuple of (DataFrame, list of full result dicts)
 
     Returns:
-        DataFrame with all results
+        DataFrame with all results (or tuple if return_full_results=True)
     """
     studies = studies or STUDIES
     patterns = patterns or PATTERNS
@@ -669,6 +686,7 @@ def run_experiment_sweep(
     output_path.mkdir(parents=True, exist_ok=True)
 
     all_results = []
+    full_results = []
     total = len(studies) * len(patterns) * len(betas) * len(epsilons)
     current = 0
 
@@ -686,6 +704,8 @@ def run_experiment_sweep(
                         beta=beta,
                         epsilon=epsilon
                     )
+
+                    full_results.append(result)
 
                     # Flatten result for DataFrame
                     flat_result = {
@@ -711,12 +731,14 @@ def run_experiment_sweep(
     results_df.to_csv(csv_path, index=False)
     print(f"\nSaved results to {csv_path}")
 
-    # Save detailed JSON
+    # Save detailed JSON (includes bounds and true_cates)
     json_path = output_path / f'experiment_results_{timestamp}.json'
     with open(json_path, 'w') as f:
-        json.dump(all_results, f, indent=2, default=str)
+        json.dump(full_results, f, indent=2, default=str)
     print(f"Saved detailed results to {json_path}")
 
+    if return_full_results:
+        return results_df, full_results
     return results_df
 
 
@@ -1496,6 +1518,369 @@ def plot_coverage_by_pattern(
     save_figure(fig, Path(output_dir) / filename)
 
 
+def plot_width_by_site(
+    results_df: pd.DataFrame,
+    output_dir: str,
+    filename: str = 'width_by_site.png'
+) -> None:
+    """
+    Plot mean bound width by site (study) with error bars.
+
+    Args:
+        results_df: DataFrame with experiment results
+        output_dir: Directory to save the figure
+        filename: Output filename
+    """
+    if 'study' not in results_df.columns or 'mean_width' not in results_df.columns:
+        print("Warning: Required columns not found, skipping width_by_site plot")
+        return
+
+    # Filter to successful experiments
+    df = results_df[results_df['mean_width'].notna()].copy()
+    if len(df) == 0:
+        print("Warning: No valid data for width_by_site plot")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Aggregate by study
+    width_stats = df.groupby('study')['mean_width'].agg(['mean', 'std', 'count'])
+    width_stats = width_stats.sort_values('mean', ascending=True)
+
+    studies = width_stats.index.tolist()
+    means = width_stats['mean'].values
+    stds = width_stats['std'].fillna(0).values
+    counts = width_stats['count'].values
+
+    # Standard error
+    sems = stds / np.sqrt(counts)
+
+    # Bar positions
+    x = np.arange(len(studies))
+
+    # Colors using gradient
+    colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(studies)))
+
+    # Bar chart with error bars
+    bars = ax.bar(x, means, color=colors, width=0.7, edgecolor='white', linewidth=0.5)
+    ax.errorbar(x, means, yerr=sems, fmt='none', color='black', capsize=4, capthick=1.5)
+
+    # Value labels on bars
+    for i, (bar, mean, count) in enumerate(zip(bars, means, counts)):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + sems[i] + 0.01,
+                f'{mean:.2f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+        ax.text(bar.get_x() + bar.get_width() / 2, 0.01,
+                f'n={int(count)}', ha='center', va='bottom', fontsize=7, color='white')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(studies, rotation=45, ha='right')
+    ax.set_xlabel('Site (Study)')
+    ax.set_ylabel('Mean Bound Width')
+    ax.set_title('CATE Bound Width by Site')
+
+    # Add grid
+    ax.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)
+
+    plt.tight_layout()
+    save_figure(fig, Path(output_dir) / filename)
+
+
+def plot_width_by_site_and_beta(
+    results_df: pd.DataFrame,
+    output_dir: str,
+    filename: str = 'width_by_site_and_beta.png'
+) -> None:
+    """
+    Plot bound width by site (study) grouped by beta values.
+
+    Args:
+        results_df: DataFrame with experiment results
+        output_dir: Directory to save the figure
+        filename: Output filename
+    """
+    if 'study' not in results_df.columns or 'mean_width' not in results_df.columns:
+        print("Warning: Required columns not found, skipping width_by_site_and_beta plot")
+        return
+
+    # Filter to successful experiments
+    df = results_df[results_df['mean_width'].notna()].copy()
+    if len(df) == 0:
+        print("Warning: No valid data for width_by_site_and_beta plot")
+        return
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+
+    # Get unique studies and betas
+    studies = sorted(df['study'].unique())
+    betas = sorted(df['beta'].unique())
+    n_betas = len(betas)
+
+    # Bar width and positions
+    bar_width = 0.8 / n_betas
+    x = np.arange(len(studies))
+
+    # Colors for each beta
+    colors = plt.cm.plasma(np.linspace(0.2, 0.8, n_betas))
+
+    # Plot bars for each beta
+    for i, beta in enumerate(betas):
+        beta_data = df[df['beta'] == beta]
+        means = []
+        for study in studies:
+            study_data = beta_data[beta_data['study'] == study]
+            if len(study_data) > 0:
+                means.append(study_data['mean_width'].mean())
+            else:
+                means.append(0)
+
+        offset = (i - n_betas / 2 + 0.5) * bar_width
+        bars = ax.bar(x + offset, means, bar_width, label=f'β={beta}',
+                      color=colors[i], edgecolor='white', linewidth=0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(studies, rotation=45, ha='right')
+    ax.set_xlabel('Site (Study)')
+    ax.set_ylabel('Mean Bound Width')
+    ax.set_title('CATE Bound Width by Site and Confounding Strength')
+    ax.legend(title='Confounding', bbox_to_anchor=(1.02, 1), loc='upper left')
+
+    # Add grid
+    ax.yaxis.grid(True, linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)
+
+    plt.tight_layout()
+    save_figure(fig, Path(output_dir) / filename)
+
+
+def plot_cate_bounds_forest(
+    result: Dict[str, Any],
+    output_dir: str,
+    filename: str = 'cate_bounds_forest.png',
+    study: str = '',
+    beta: float = 0.0
+) -> None:
+    """
+    Plot forest-style visualization showing true CATE with estimated bounds.
+
+    Args:
+        result: Single experiment result dict with 'bounds' and 'true_cates'
+        output_dir: Directory to save the figure
+        filename: Output filename
+        study: Study name for title
+        beta: Beta value for title
+    """
+    if 'bounds' not in result:
+        print("Warning: No bounds data available for forest plot")
+        return
+
+    bounds_df = pd.DataFrame(result['bounds'])
+    true_cates = result.get('true_cates', {})
+    true_ate = result.get('metrics', {}).get('true_ate', np.nan)
+
+    if len(bounds_df) == 0:
+        print("Warning: Empty bounds data")
+        return
+
+    # Match bounds with true CATEs
+    plot_data = []
+    for _, row in bounds_df.iterrows():
+        z_val = row.get('z', None)
+        if z_val is not None:
+            z_str = str(tuple(z_val)) if hasattr(z_val, '__iter__') else str(z_val)
+            if z_str in true_cates:
+                plot_data.append({
+                    'z': z_str,
+                    'true_cate': true_cates[z_str],
+                    'lower': row['cate_lower'],
+                    'upper': row['cate_upper'],
+                    'covered': row['cate_lower'] <= true_cates[z_str] <= row['cate_upper']
+                })
+
+    if len(plot_data) == 0:
+        # Fall back to using bounds without true CATEs
+        for i, row in bounds_df.head(20).iterrows():
+            z_val = row.get('z', i)
+            plot_data.append({
+                'z': str(z_val),
+                'true_cate': None,
+                'lower': row['cate_lower'],
+                'upper': row['cate_upper'],
+                'covered': True  # Unknown
+            })
+
+    # Sort by true CATE if available
+    if plot_data[0]['true_cate'] is not None:
+        plot_data = sorted(plot_data, key=lambda x: x['true_cate'])
+
+    n_strata = len(plot_data)
+    fig_height = max(5, n_strata * 0.4)
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+
+    y_positions = np.arange(n_strata)
+
+    for i, row in enumerate(plot_data):
+        lower = row['lower']
+        upper = row['upper']
+        true_cate = row['true_cate']
+        is_covered = row['covered']
+
+        # Color based on coverage
+        color = '#2ecc71' if is_covered else '#e74c3c'
+
+        # Draw bounds
+        ax.hlines(y=i, xmin=lower, xmax=upper, color=color, linewidth=3, alpha=0.7)
+        cap_height = 0.25
+        ax.vlines(x=lower, ymin=i - cap_height, ymax=i + cap_height, color=color, linewidth=2)
+        ax.vlines(x=upper, ymin=i - cap_height, ymax=i + cap_height, color=color, linewidth=2)
+
+        # True CATE marker
+        if true_cate is not None:
+            ax.plot(true_cate, i, 'D', color='black', markersize=8, zorder=5)
+
+    # Reference lines
+    ax.axvline(x=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+    if not np.isnan(true_ate):
+        ax.axvline(x=true_ate, color='#3498db', linestyle=':', linewidth=2,
+                   label=f'True ATE = {true_ate:.2f}')
+
+    # Y-axis labels
+    y_labels = [row['z'][:20] for row in plot_data]  # Truncate long labels
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(y_labels, fontsize=8)
+
+    ax.set_xlabel('Treatment Effect', fontsize=11)
+    ax.set_ylabel('Stratum', fontsize=11)
+
+    title = 'CATE Bounds vs True Values'
+    if study:
+        title += f' ({study}'
+        if beta:
+            title += f', β={beta}'
+        title += ')'
+    ax.set_title(title, fontsize=12)
+
+    # Legend
+    legend_elements = [
+        Line2D([0], [0], color='#2ecc71', linewidth=3, label='Covered'),
+        Line2D([0], [0], color='#e74c3c', linewidth=3, label='Not Covered'),
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='black',
+               markersize=8, label='True CATE'),
+    ]
+    if not np.isnan(true_ate):
+        legend_elements.append(Line2D([0], [0], color='#3498db', linestyle=':', linewidth=2, label='True ATE'))
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=9)
+
+    ax.invert_yaxis()
+    ax.grid(True, axis='x', alpha=0.3)
+
+    plt.tight_layout()
+    save_figure(fig, Path(output_dir) / filename)
+
+
+def plot_cate_bounds_grid(
+    results: List[Dict[str, Any]],
+    output_dir: str,
+    filename: str = 'cate_bounds_grid.png'
+) -> None:
+    """
+    Plot grid of CATE bounds vs true values for multiple experiments.
+
+    Args:
+        results: List of experiment result dicts
+        output_dir: Directory to save the figure
+        filename: Output filename
+    """
+    # Filter to results with bounds and true_cates
+    valid_results = []
+    for r in results:
+        if 'error' not in r and 'bounds' in r:
+            bounds_df = pd.DataFrame(r['bounds'])
+            true_cates = r.get('true_cates', {})
+            if len(bounds_df) > 0 and len(true_cates) > 0:
+                valid_results.append(r)
+
+    if len(valid_results) == 0:
+        print("Warning: No valid results for CATE bounds grid")
+        return
+
+    # Limit to reasonable number
+    valid_results = valid_results[:9]
+    n_results = len(valid_results)
+    n_cols = min(3, n_results)
+    n_rows = (n_results + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), squeeze=False)
+
+    for idx, result in enumerate(valid_results):
+        row = idx // n_cols
+        col = idx % n_cols
+        ax = axes[row, col]
+
+        bounds_df = pd.DataFrame(result['bounds'])
+        true_cates = result.get('true_cates', {})
+
+        # Build plot data
+        plot_data = []
+        for _, brow in bounds_df.iterrows():
+            z_val = brow.get('z', None)
+            if z_val is not None:
+                z_str = str(tuple(z_val)) if hasattr(z_val, '__iter__') else str(z_val)
+                if z_str in true_cates:
+                    plot_data.append({
+                        'true_cate': true_cates[z_str],
+                        'lower': brow['cate_lower'],
+                        'upper': brow['cate_upper'],
+                        'covered': brow['cate_lower'] <= true_cates[z_str] <= brow['cate_upper']
+                    })
+
+        if len(plot_data) == 0:
+            ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        plot_data = sorted(plot_data, key=lambda x: x['true_cate'])
+        n_strata = len(plot_data)
+        y_positions = np.arange(n_strata)
+
+        for i, prow in enumerate(plot_data):
+            color = '#2ecc71' if prow['covered'] else '#e74c3c'
+            ax.hlines(y=i, xmin=prow['lower'], xmax=prow['upper'], color=color, linewidth=2, alpha=0.7)
+            ax.vlines(x=prow['lower'], ymin=i - 0.2, ymax=i + 0.2, color=color, linewidth=1.5)
+            ax.vlines(x=prow['upper'], ymin=i - 0.2, ymax=i + 0.2, color=color, linewidth=1.5)
+            ax.plot(prow['true_cate'], i, 'D', color='black', markersize=5, zorder=5)
+
+        ax.axvline(x=0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+        config = result.get('config', {})
+        study = config.get('study', '?')
+        beta = config.get('beta', '?')
+        coverage = result.get('metrics', {}).get('cate_coverage_rate', 0)
+        ax.set_title(f'{study} β={beta}\n(Cov: {coverage:.0%})', fontsize=10)
+        ax.set_xlabel('Effect', fontsize=9)
+        ax.set_yticks([])
+        ax.invert_yaxis()
+        ax.grid(True, axis='x', alpha=0.3)
+
+    # Hide unused subplots
+    for idx in range(n_results, n_rows * n_cols):
+        row = idx // n_cols
+        col = idx % n_cols
+        axes[row, col].set_visible(False)
+
+    # Legend
+    legend_elements = [
+        Line2D([0], [0], color='#2ecc71', linewidth=2, label='Covered'),
+        Line2D([0], [0], color='#e74c3c', linewidth=2, label='Not Covered'),
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='black',
+               markersize=5, label='True CATE'),
+    ]
+    fig.legend(handles=legend_elements, loc='upper center', ncol=3, fontsize=9,
+               bbox_to_anchor=(0.5, 1.02))
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    save_figure(fig, Path(output_dir) / filename)
+
+
 def plot_covariate_scores_bar(
     covariate_scores: pd.DataFrame,
     output_dir: str,
@@ -1563,6 +1948,7 @@ def generate_all_figures(
     output_dir: str,
     single_result: Optional[Dict[str, Any]] = None,
     results_by_epsilon: Optional[Dict[float, Dict]] = None,
+    all_results: Optional[List[Dict[str, Any]]] = None,
     study: str = '',
     beta: float = 0.0,
     verbose: bool = True
@@ -1575,6 +1961,7 @@ def generate_all_figures(
         output_dir: Directory to save all figures
         single_result: Optional single experiment result dict (for forest/baseline plots)
         results_by_epsilon: Optional dict mapping epsilon to results (for sensitivity plots)
+        all_results: Optional list of all experiment result dicts (for CATE bounds grid)
         study: Study name for titles
         beta: Beta value for titles
         verbose: Print progress messages
@@ -1659,6 +2046,24 @@ def generate_all_figures(
             if verbose:
                 print(f"  Warning: Could not generate coverage by pattern: {e}")
 
+        # Width by site
+        try:
+            if 'study' in results_df.columns and 'mean_width' in results_df.columns:
+                plot_width_by_site(results_df, output_dir)
+                generated_files.append('width_by_site.png')
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not generate width by site: {e}")
+
+        # Width by site and beta
+        try:
+            if 'study' in results_df.columns and 'mean_width' in results_df.columns and 'beta' in results_df.columns:
+                plot_width_by_site_and_beta(results_df, output_dir)
+                generated_files.append('width_by_site_and_beta.png')
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not generate width by site and beta: {e}")
+
     # Single experiment plots (require single_result)
     if single_result is not None and 'error' not in single_result:
         # Forest bounds plot
@@ -1706,6 +2111,29 @@ def generate_all_figures(
         except Exception as e:
             if verbose:
                 print(f"  Warning: Could not generate covariate scores plot: {e}")
+
+        # CATE bounds forest plot
+        try:
+            filename = f'cate_bounds_forest_{study}_{beta}.png' if study else 'cate_bounds_forest.png'
+            plot_cate_bounds_forest(
+                single_result, output_dir, filename,
+                study=study, beta=beta
+            )
+            generated_files.append(filename)
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: Could not generate CATE bounds forest: {e}")
+
+    # CATE bounds grid if multiple results provided
+    if all_results is not None and len(all_results) > 0:
+        valid_results = [r for r in all_results if 'error' not in r and 'bounds' in r]
+        if len(valid_results) > 0:
+            try:
+                plot_cate_bounds_grid(valid_results, output_dir)
+                generated_files.append('cate_bounds_grid.png')
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Could not generate CATE bounds grid: {e}")
 
     # Epsilon sensitivity plots (require results_by_epsilon)
     if results_by_epsilon is not None and len(results_by_epsilon) > 0:
@@ -1816,6 +2244,7 @@ def generate_full_report(
     output_dir: str,
     single_result: Optional[Dict[str, Any]] = None,
     results_by_epsilon: Optional[Dict[float, Dict]] = None,
+    all_results: Optional[List[Dict[str, Any]]] = None,
     study: str = '',
     beta: float = 0.0,
     verbose: bool = True
@@ -1828,6 +2257,7 @@ def generate_full_report(
         output_dir: Directory to save all outputs
         single_result: Optional single experiment result dict
         results_by_epsilon: Optional dict mapping epsilon to results
+        all_results: Optional list of all experiment result dicts
         study: Study name for titles/captions
         beta: Beta value for titles
         verbose: Print progress messages
@@ -1846,6 +2276,7 @@ def generate_full_report(
         output_dir=str(figures_dir),
         single_result=single_result,
         results_by_epsilon=results_by_epsilon,
+        all_results=all_results,
         study=study,
         beta=beta,
         verbose=verbose
@@ -1895,18 +2326,42 @@ def main():
     parser.add_argument('--all', action='store_true', help='Run all experiments')
     parser.add_argument('--grid', action='store_true', help='Run grid of experiments')
     parser.add_argument('--output', type=str, default='results', help='Output directory')
+    parser.add_argument('--binary-only', action='store_true',
+                        help='Filter to studies with binary outcomes only '
+                             f'({", ".join(BINARY_OUTCOME_STUDIES)})')
+    parser.add_argument('--report', action='store_true',
+                        help='Generate full report with figures and tables after running experiments')
 
     args = parser.parse_args()
 
+    # Determine which studies to run
+    if args.binary_only:
+        studies_to_run = BINARY_OUTCOME_STUDIES
+        print(f"Filtering to binary outcome studies: {studies_to_run}")
+    else:
+        studies_to_run = None  # Use defaults in each function
+
     if args.all:
         # Run full sweep
-        run_experiment_sweep(
+        results_df, full_results = run_experiment_sweep(
+            studies=studies_to_run,
             output_dir=args.output,
-            verbose=True
+            verbose=True,
+            return_full_results=True
         )
+        # Generate report if requested
+        if args.report and results_df is not None and len(results_df) > 0:
+            print("\nGenerating report...")
+            generate_full_report(
+                results_df=results_df,
+                output_dir=args.output,
+                all_results=full_results,
+                verbose=True
+            )
     elif args.grid:
         # Run grid experiment
-        run_full_grid(
+        results_df = run_full_grid(
+            studies=studies_to_run,
             epsilon=args.epsilon,
             output_dir=args.output,
             target_site=args.target,
@@ -1915,6 +2370,14 @@ def main():
             rct_path=args.rct_path,
             random_seed=args.seed
         )
+        # Generate report if requested
+        if args.report and results_df is not None and len(results_df) > 0:
+            print("\nGenerating report...")
+            generate_full_report(
+                results_df=results_df,
+                output_dir=args.output,
+                verbose=True
+            )
     elif args.study:
         # Run single experiment
         result = run_single_experiment(
