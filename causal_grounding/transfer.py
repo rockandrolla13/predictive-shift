@@ -178,6 +178,185 @@ def compute_bound_metrics(
     return metrics
 
 
+def aggregate_across_instruments(
+    instrument_bounds: Dict[str, Dict[Tuple, Tuple]],
+    method: str = 'intersection'
+) -> Dict[Tuple, Tuple]:
+    """
+    Aggregate bounds across multiple instruments.
+
+    This is Ricardo's multi-instrument approach:
+    - For each stratum, combine bounds from all valid instruments
+    - Intersection: lower = max(lowers), upper = min(uppers)
+    - Union: lower = min(lowers), upper = max(uppers) (conservative)
+
+    The intersection approach gives tighter bounds by combining
+    information from multiple instruments.
+
+    Args:
+        instrument_bounds: Dict[instrument_name -> {z_value: (lower, upper)}]
+        method: 'intersection' (tighter) or 'union' (conservative)
+
+    Returns:
+        {z_value: (lower, upper)} - aggregated bounds
+
+    Example:
+        >>> bounds_z1 = {(0,): (0.1, 0.5), (1,): (0.2, 0.6)}
+        >>> bounds_z2 = {(0,): (0.15, 0.45), (1,): (0.18, 0.55)}
+        >>> agg = aggregate_across_instruments({'Z1': bounds_z1, 'Z2': bounds_z2})
+        >>> # For stratum (0,): max(0.1, 0.15) = 0.15, min(0.5, 0.45) = 0.45
+    """
+    # Collect all z values across instruments
+    all_z_values = set()
+    for inst_bounds in instrument_bounds.values():
+        all_z_values.update(inst_bounds.keys())
+
+    result = {}
+
+    for z in all_z_values:
+        lowers = []
+        uppers = []
+
+        for inst_name, inst_bounds in instrument_bounds.items():
+            if z in inst_bounds:
+                lower, upper = inst_bounds[z]
+                lowers.append(lower)
+                uppers.append(upper)
+
+        if not lowers:
+            continue
+
+        if method == 'intersection':
+            # Tighter bounds: max of lowers, min of uppers
+            agg_lower = max(lowers)
+            agg_upper = min(uppers)
+
+            # Check for empty interval
+            if agg_lower > agg_upper:
+                # Instruments disagree - take midpoint as both bounds
+                midpoint = (agg_lower + agg_upper) / 2
+                result[z] = (midpoint, midpoint)
+            else:
+                result[z] = (agg_lower, agg_upper)
+
+        elif method == 'union':
+            # Conservative: min of lowers, max of uppers
+            result[z] = (min(lowers), max(uppers))
+
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'intersection' or 'union'.")
+
+    return result
+
+
+def aggregate_with_weights(
+    instrument_bounds: Dict[str, Dict[Tuple, Tuple]],
+    instrument_weights: Dict[str, float]
+) -> Dict[Tuple, Tuple]:
+    """
+    Weighted aggregation across instruments.
+
+    Args:
+        instrument_bounds: Dict[instrument_name -> {z_value: (lower, upper)}]
+        instrument_weights: Dict[instrument_name -> weight] (e.g., from EHS scores)
+
+    Returns:
+        {z_value: (lower, upper)} - weighted average bounds
+    """
+    all_z_values = set()
+    for inst_bounds in instrument_bounds.values():
+        all_z_values.update(inst_bounds.keys())
+
+    result = {}
+
+    for z in all_z_values:
+        weighted_lowers = []
+        weighted_uppers = []
+        total_weight = 0.0
+
+        for inst_name, inst_bounds in instrument_bounds.items():
+            if z in inst_bounds:
+                weight = instrument_weights.get(inst_name, 1.0)
+                lower, upper = inst_bounds[z]
+                weighted_lowers.append(weight * lower)
+                weighted_uppers.append(weight * upper)
+                total_weight += weight
+
+        if total_weight > 0:
+            result[z] = (
+                sum(weighted_lowers) / total_weight,
+                sum(weighted_uppers) / total_weight
+            )
+
+    return result
+
+
+def compute_instrument_agreement(
+    instrument_bounds: Dict[str, Dict[Tuple, Tuple]]
+) -> pd.DataFrame:
+    """
+    Analyze agreement between instruments.
+
+    For each stratum, computes:
+    - Overlap: whether all instrument bounds overlap
+    - Agreement score: proportion of interval overlap
+    - Range of lowers/uppers across instruments
+
+    Args:
+        instrument_bounds: Dict[instrument_name -> {z_value: (lower, upper)}]
+
+    Returns:
+        DataFrame with agreement metrics per stratum
+    """
+    all_z_values = set()
+    for inst_bounds in instrument_bounds.values():
+        all_z_values.update(inst_bounds.keys())
+
+    records = []
+
+    for z in all_z_values:
+        lowers = []
+        uppers = []
+        inst_names = []
+
+        for inst_name, inst_bounds in instrument_bounds.items():
+            if z in inst_bounds:
+                lower, upper = inst_bounds[z]
+                lowers.append(lower)
+                uppers.append(upper)
+                inst_names.append(inst_name)
+
+        if len(lowers) < 2:
+            continue
+
+        # Check overlap
+        max_lower = max(lowers)
+        min_upper = min(uppers)
+        overlap = max_lower <= min_upper
+
+        # Agreement score: width of intersection / width of union
+        if overlap:
+            intersection_width = min_upper - max_lower
+            union_width = max(uppers) - min(lowers)
+            agreement_score = intersection_width / union_width if union_width > 0 else 1.0
+        else:
+            agreement_score = 0.0
+
+        records.append({
+            'stratum': str(z),
+            'n_instruments': len(lowers),
+            'instruments': ', '.join(inst_names),
+            'overlap': overlap,
+            'agreement_score': agreement_score,
+            'lower_range': max(lowers) - min(lowers),
+            'upper_range': max(uppers) - min(uppers),
+            'intersection_lower': max_lower,
+            'intersection_upper': min_upper if overlap else max_lower,
+        })
+
+    return pd.DataFrame(records)
+
+
 def bounds_to_dataframe(
     bounds: Dict[Tuple, Tuple],
     covariate_names: Optional[List[str]] = None

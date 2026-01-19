@@ -179,6 +179,120 @@ def select_best_instrument(
         return df.index[0]
 
 
+def select_top_k_instruments(
+    scores_df: pd.DataFrame,
+    k: int = 3,
+    require_passes_ehs: bool = False,
+    require_full_ehs: bool = False,
+    min_pass_rate: float = 0.5,
+    exclude_weak_instruments: bool = False
+) -> List[str]:
+    """
+    Select top-k instrumental covariates from ranked scores.
+
+    This extends select_best_instrument to support multi-instrument
+    aggregation as in Ricardo's approach.
+
+    Args:
+        scores_df: DataFrame from rank_covariates
+        k: Number of instruments to select
+        require_passes_ehs: Only consider covariates passing EHS (test_i, test_ii)
+        require_full_ehs: Only consider covariates passing full EHS (includes test_ia)
+        min_pass_rate: Minimum proportion of sites passing EHS criteria
+        exclude_weak_instruments: Exclude covariates with weak_instrument_warning
+
+    Returns:
+        List of top-k covariate names (may be fewer if not enough qualify)
+
+    Example:
+        >>> scores = rank_covariates(data, covariates, 'X', 'Y')
+        >>> top_3 = select_top_k_instruments(scores, k=3, require_passes_ehs=True)
+        >>> # Use top_3 for multi-instrument bounds aggregation
+    """
+    df = scores_df.copy()
+
+    # Filter by full EHS (includes instrument relevance test_ia)
+    if require_full_ehs:
+        if 'passes_full_ehs' in df.columns:
+            if df['passes_full_ehs'].dtype == float:
+                df = df[df['passes_full_ehs'] >= min_pass_rate]
+            else:
+                df = df[df['passes_full_ehs'] == True]
+    # Filter by original EHS (test_i, test_ii only)
+    elif require_passes_ehs:
+        if 'passes_ehs' in df.columns:
+            if df['passes_ehs'].dtype == float:
+                df = df[df['passes_ehs'] >= min_pass_rate]
+            else:
+                df = df[df['passes_ehs'] == True]
+
+    # Exclude weak instruments
+    if exclude_weak_instruments and 'weak_instrument_warning' in df.columns:
+        df = df[df['weak_instrument_warning'] == False]
+
+    if len(df) == 0:
+        return []
+
+    # Get top-k
+    if 'z_a' in df.columns:
+        return df.head(k)['z_a'].tolist()
+    else:
+        return df.head(k).index.tolist()
+
+
+def get_instrument_bounds_for_aggregation(
+    training_data: Dict[str, pd.DataFrame],
+    instruments: List[str],
+    treatment: str,
+    outcome: str,
+    other_covariates: List[str],
+    epsilon: float = 0.1,
+    regime_col: str = 'F'
+) -> Dict[str, Dict[tuple, tuple]]:
+    """
+    Compute bounds for each instrument separately for aggregation.
+
+    Args:
+        training_data: Dict[site_id -> DataFrame]
+        instruments: List of instrument covariate names
+        treatment: Treatment column name
+        outcome: Outcome column name
+        other_covariates: Non-instrument covariates (define strata)
+        epsilon: Naturalness tolerance
+        regime_col: Regime indicator column
+
+    Returns:
+        Dict[instrument_name -> {z_value: (lower, upper)}]
+
+    Example:
+        >>> top_instruments = select_top_k_instruments(scores, k=3)
+        >>> bounds_per_inst = get_instrument_bounds_for_aggregation(
+        ...     training_data, top_instruments, 'X', 'Y', ['age', 'gender']
+        ... )
+        >>> aggregated = aggregate_across_instruments(bounds_per_inst)
+    """
+    from .lp_solver import solve_all_bounds_binary_lp
+
+    instrument_bounds = {}
+
+    for instrument in instruments:
+        # Use this instrument as the main covariate, others as stratifying
+        covariates = [instrument] + other_covariates
+
+        bounds = solve_all_bounds_binary_lp(
+            training_data,
+            covariates=covariates,
+            treatment=treatment,
+            outcome=outcome,
+            epsilon=epsilon,
+            regime_col=regime_col
+        )
+
+        instrument_bounds[instrument] = bounds
+
+    return instrument_bounds
+
+
 # Test
 if __name__ == "__main__":
     from .discretize import discretize_covariates, get_discretized_covariate_names
