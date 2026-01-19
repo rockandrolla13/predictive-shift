@@ -115,7 +115,12 @@ def rank_covariates_across_sites(
         'test_ii_cmi': 'mean',
         'test_ii_pvalue': 'mean',
         'test_ii_reject': 'mean',
+        'test_ia_cmi': 'mean',
+        'test_ia_pvalue': 'mean',
+        'test_ia_reject': 'mean',  # Proportion of sites with instrument relevance
         'passes_ehs': 'mean',
+        'passes_full_ehs': 'mean',  # Proportion passing all 3 criteria
+        'weak_instrument_warning': 'max',  # True if any site flagged
         'score': 'mean',
         'site': 'count'  # Number of sites
     }).rename(columns={'site': 'n_sites'})
@@ -126,28 +131,43 @@ def rank_covariates_across_sites(
 def select_best_instrument(
     scores_df: pd.DataFrame,
     require_passes_ehs: bool = False,
-    min_pass_rate: float = 0.5
+    require_full_ehs: bool = False,
+    min_pass_rate: float = 0.5,
+    exclude_weak_instruments: bool = False
 ) -> Optional[str]:
     """
     Select best instrumental covariate from ranked scores.
 
     Args:
         scores_df: DataFrame from rank_covariates
-        require_passes_ehs: Only consider covariates passing EHS
-        min_pass_rate: Minimum proportion of sites passing EHS
+        require_passes_ehs: Only consider covariates passing original EHS (test_i, test_ii)
+        require_full_ehs: Only consider covariates passing full EHS (includes test_ia)
+        min_pass_rate: Minimum proportion of sites passing EHS criteria
+        exclude_weak_instruments: Exclude covariates with weak_instrument_warning
 
     Returns:
         Best covariate name, or None if none qualify
     """
     df = scores_df.copy()
 
-    if require_passes_ehs:
+    # Filter by full EHS (includes instrument relevance test_ia)
+    if require_full_ehs:
+        if 'passes_full_ehs' in df.columns:
+            if df['passes_full_ehs'].dtype == float:
+                df = df[df['passes_full_ehs'] >= min_pass_rate]
+            else:
+                df = df[df['passes_full_ehs'] == True]
+    # Filter by original EHS (test_i, test_ii only)
+    elif require_passes_ehs:
         if 'passes_ehs' in df.columns:
-            # For aggregated scores, passes_ehs is proportion
             if df['passes_ehs'].dtype == float:
                 df = df[df['passes_ehs'] >= min_pass_rate]
             else:
                 df = df[df['passes_ehs'] == True]
+
+    # Exclude weak instruments
+    if exclude_weak_instruments and 'weak_instrument_warning' in df.columns:
+        df = df[df['weak_instrument_warning'] == False]
 
     if len(df) == 0:
         return None

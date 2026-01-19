@@ -37,6 +37,42 @@ def synthetic_dependent_data():
 
 
 @pytest.fixture
+def synthetic_strong_instrument_data():
+    """
+    Create data with strong instrument: Z_a -> X -> Y (valid IV structure).
+
+    Z_a strongly predicts X, Y depends on X only (not directly on Z_a).
+    """
+    np.random.seed(42)
+    n = 500
+    Z_a = np.random.choice([0, 1], n)
+    Z_b = np.random.choice([0, 1], n)  # Noise covariate
+    # X strongly depends on Z_a (80% correlation)
+    X = np.where(np.random.random(n) < 0.8, Z_a, 1 - Z_a)
+    # Y depends only on X (not directly on Z_a)
+    Y = np.where(np.random.random(n) < 0.7, X, 1 - X)
+    return pd.DataFrame({'Y': Y, 'X': X, 'Z_a': Z_a, 'Z_b': Z_b})
+
+
+@pytest.fixture
+def synthetic_weak_instrument_data():
+    """
+    Create data with weak/invalid instrument: Z_a independent of X.
+
+    Z_a does not predict X (weak instrument), but may affect Y directly.
+    """
+    np.random.seed(42)
+    n = 500
+    Z_a = np.random.choice([0, 1], n)
+    Z_b = np.random.choice([0, 1], n)
+    # X is independent of Z_a
+    X = np.random.choice([0, 1], n)
+    # Y depends on both X and Z_a directly (violates exclusion)
+    Y = ((X + Z_a) > 0).astype(int)
+    return pd.DataFrame({'Y': Y, 'X': X, 'Z_a': Z_a, 'Z_b': Z_b})
+
+
+@pytest.fixture
 def ci_engine():
     """Create CITestEngine with reduced permutations for speed."""
     return CITestEngine(n_permutations=100, random_seed=42)
@@ -413,3 +449,191 @@ class TestCITestEngineEdgeCases:
         # But CMI values should be computed
         assert result['test_i_cmi'] >= 0
         assert result['test_ii_cmi'] >= 0
+
+
+# =============================================================================
+# TEST CLASS: TestEHSInstrumentRelevance (NEW)
+# =============================================================================
+
+class TestEHSInstrumentRelevance:
+    """Test the new test (i.a) for instrument-treatment relevance."""
+
+    def test_ia_fields_in_result(self, ci_engine):
+        """Test that new test_ia fields are present in result."""
+        np.random.seed(42)
+        n = 300
+        df = pd.DataFrame({
+            'Y': np.random.choice([0, 1], n),
+            'X': np.random.choice([0, 1], n),
+            'Z_a': np.random.choice([0, 1], n),
+            'Z_b': np.random.choice([0, 1], n)
+        })
+
+        result = ci_engine.score_ehs_criteria(
+            df, z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y'
+        )
+
+        # Check new fields exist
+        assert 'test_ia_cmi' in result
+        assert 'test_ia_pvalue' in result
+        assert 'test_ia_reject' in result
+        assert 'passes_full_ehs' in result
+        assert 'weak_instrument_warning' in result
+
+        # Check types (accept both Python bool and numpy bool_)
+        assert isinstance(result['test_ia_cmi'], (float, np.floating))
+        assert isinstance(result['test_ia_pvalue'], (float, np.floating))
+        assert isinstance(result['test_ia_reject'], (bool, np.bool_))
+        assert isinstance(result['passes_full_ehs'], (bool, np.bool_))
+        assert isinstance(result['weak_instrument_warning'], (bool, np.bool_))
+
+    def test_backward_compatibility(self, ci_engine):
+        """Test that all original fields are still present."""
+        np.random.seed(42)
+        n = 300
+        df = pd.DataFrame({
+            'Y': np.random.choice([0, 1], n),
+            'X': np.random.choice([0, 1], n),
+            'Z_a': np.random.choice([0, 1], n),
+            'Z_b': np.random.choice([0, 1], n)
+        })
+
+        result = ci_engine.score_ehs_criteria(
+            df, z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y'
+        )
+
+        # All original fields must exist
+        original_fields = [
+            'z_a', 'test_i_cmi', 'test_i_pvalue', 'test_i_reject',
+            'test_ii_cmi', 'test_ii_pvalue', 'test_ii_reject',
+            'passes_ehs', 'score'
+        ]
+        for field in original_fields:
+            assert field in result, f"Missing original field: {field}"
+
+    def test_strong_instrument_high_ia_cmi(self, synthetic_strong_instrument_data):
+        """Test that strong instrument has high I(X; Z_a | Z_b)."""
+        engine = CITestEngine(n_permutations=200, random_seed=42)
+        result = engine.score_ehs_criteria(
+            synthetic_strong_instrument_data,
+            z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y'
+        )
+
+        # Strong instrument should have high CMI for test_ia
+        assert result['test_ia_cmi'] > 0.05, \
+            f"Strong instrument should have test_ia_cmi > 0.05, got {result['test_ia_cmi']}"
+        # Should reject independence (Z_a predicts X)
+        assert result['test_ia_reject'] == True, \
+            "Strong instrument should reject H0: X ⊥ Z_a | Z_b"
+
+    def test_weak_instrument_low_ia_cmi(self, synthetic_weak_instrument_data):
+        """Test that weak instrument has low I(X; Z_a | Z_b)."""
+        engine = CITestEngine(n_permutations=200, random_seed=42)
+        result = engine.score_ehs_criteria(
+            synthetic_weak_instrument_data,
+            z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y'
+        )
+
+        # Weak instrument should have low CMI for test_ia
+        assert result['test_ia_cmi'] < 0.05, \
+            f"Weak instrument should have test_ia_cmi < 0.05, got {result['test_ia_cmi']}"
+
+    def test_passes_full_ehs_logic(self, synthetic_strong_instrument_data):
+        """Test that passes_full_ehs requires all three criteria."""
+        engine = CITestEngine(n_permutations=200, random_seed=42)
+        result = engine.score_ehs_criteria(
+            synthetic_strong_instrument_data,
+            z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y'
+        )
+
+        # passes_full_ehs = passes_ehs AND test_ia_reject
+        expected_full = result['passes_ehs'] and result['test_ia_reject']
+        assert result['passes_full_ehs'] == expected_full, \
+            f"passes_full_ehs should be {expected_full}, got {result['passes_full_ehs']}"
+
+    def test_weak_instrument_warning_triggered(self):
+        """Test that weak_instrument_warning fires when appropriate."""
+        np.random.seed(123)
+        n = 500
+        # Create scenario: Z_a independent of X but correlated with Y through confounding
+        Z_a = np.random.choice([0, 1], n)
+        Z_b = np.random.choice([0, 1], n)
+        X = np.random.choice([0, 1], n)  # Independent of Z_a
+        # Y depends on Z_a (creates positive score) but Z_a doesn't predict X
+        Y = np.where(np.random.random(n) < 0.7, Z_a, 1 - Z_a)
+
+        df = pd.DataFrame({'Y': Y, 'X': X, 'Z_a': Z_a, 'Z_b': Z_b})
+
+        engine = CITestEngine(n_permutations=200, random_seed=42)
+        result = engine.score_ehs_criteria(
+            df, z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y'
+        )
+
+        # If score > 0 but test_ia_cmi < threshold, warning should fire
+        if result['score'] > 0 and result['test_ia_cmi'] < 0.01:
+            assert result['weak_instrument_warning'] == True
+
+    def test_empty_zb_with_ia_test(self, ci_engine):
+        """Test that test_ia works with empty conditioning set."""
+        np.random.seed(42)
+        n = 300
+        Z_a = np.random.choice([0, 1], n)
+        X = np.where(np.random.random(n) < 0.8, Z_a, 1 - Z_a)
+        Y = np.random.choice([0, 1], n)
+
+        df = pd.DataFrame({'Y': Y, 'X': X, 'Z_a': Z_a})
+
+        result = ci_engine.score_ehs_criteria(
+            df, z_a='Z_a', z_b=[], treatment='X', outcome='Y'
+        )
+
+        # Should still compute test_ia
+        assert 'test_ia_cmi' in result
+        assert result['test_ia_cmi'] >= 0
+        # With strong Z_a -> X, should have high CMI
+        assert result['test_ia_cmi'] > 0.05
+
+    def test_ia_without_permutation(self):
+        """Test that test_ia works in CMI-only mode."""
+        np.random.seed(42)
+        n = 300
+        Z_a = np.random.choice([0, 1], n)
+        X = np.where(np.random.random(n) < 0.8, Z_a, 1 - Z_a)
+        Y = np.random.choice([0, 1], n)
+        Z_b = np.random.choice([0, 1], n)
+
+        df = pd.DataFrame({'Y': Y, 'X': X, 'Z_a': Z_a, 'Z_b': Z_b})
+
+        engine = CITestEngine(n_permutations=100, random_seed=42)
+        result = engine.score_ehs_criteria(
+            df, z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y',
+            use_permutation_test=False
+        )
+
+        # p-value should be None in CMI-only mode
+        assert result['test_ia_pvalue'] is None
+        # CMI should still be computed
+        assert result['test_ia_cmi'] >= 0
+        # All new flags should exist
+        assert 'passes_full_ehs' in result
+        assert 'weak_instrument_warning' in result
+
+    def test_score_formula_unchanged(self, ci_engine):
+        """Test that score is still test_ii_cmi - test_i_cmi (not affected by test_ia)."""
+        np.random.seed(42)
+        n = 300
+        df = pd.DataFrame({
+            'Y': np.random.choice([0, 1], n),
+            'X': np.random.choice([0, 1], n),
+            'Z_a': np.random.choice([0, 1], n),
+            'Z_b': np.random.choice([0, 1], n)
+        })
+
+        result = ci_engine.score_ehs_criteria(
+            df, z_a='Z_a', z_b=['Z_b'], treatment='X', outcome='Y'
+        )
+
+        # Score formula should be unchanged
+        expected_score = result['test_ii_cmi'] - result['test_i_cmi']
+        assert np.isclose(result['score'], expected_score, rtol=1e-10), \
+            f"Score should be test_ii_cmi - test_i_cmi, got {result['score']} vs {expected_score}"

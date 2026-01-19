@@ -280,14 +280,16 @@ class CITestEngine:
         z_b: List[str],
         treatment: str,
         outcome: str,
-        use_permutation_test: bool = True
+        use_permutation_test: bool = True,
+        weak_instrument_threshold: float = 0.01
     ) -> Dict[str, Any]:
         """
         Score covariate z_a on modified EHS criteria.
 
         EHS (Entner-Hoyer-Spirtes) criteria for valid instrument:
-        - Test (i):  Y ⊥ Z_a | (Z_b, X)  → should NOT reject
-        - Test (ii): Y ⊥̸ Z_a | Z_b       → should reject
+        - Test (i):   Y ⊥ Z_a | (Z_b, X)  → should NOT reject (exogeneity)
+        - Test (ii):  Y ⊥̸ Z_a | Z_b       → should reject (outcome relevance)
+        - Test (i.a): X ⊥̸ Z_a | Z_b       → should reject (instrument relevance)
 
         Args:
             data: DataFrame with discretized variables
@@ -296,6 +298,7 @@ class CITestEngine:
             treatment: Treatment column (X)
             outcome: Outcome column (Y)
             use_permutation_test: Use full test (True) or CMI only (False)
+            weak_instrument_threshold: CMI threshold below which instrument is weak
 
         Returns:
             {
@@ -306,21 +309,35 @@ class CITestEngine:
                 'test_ii_cmi': float,
                 'test_ii_pvalue': float or None,
                 'test_ii_reject': bool,
-                'passes_ehs': bool,
+                'test_ia_cmi': float,           # NEW: I(X; Z_a | Z_b)
+                'test_ia_pvalue': float or None, # NEW
+                'test_ia_reject': bool,          # NEW
+                'passes_ehs': bool,              # Original: test_i NOT reject AND test_ii reject
+                'passes_full_ehs': bool,         # NEW: passes_ehs AND test_ia reject
+                'weak_instrument_warning': bool, # NEW: low test_ia_cmi but positive score
                 'score': float
             }
         """
         if use_permutation_test:
+            # Test (i): Y ⊥ Z_a | (Z_b, X) — exogeneity (should NOT reject)
             test_i = self.test_conditional_independence(
                 data, z_a, outcome, z_b + [treatment]
             )
+            # Test (ii): Y ⊥̸ Z_a | Z_b — outcome relevance (should reject)
             test_ii = self.test_conditional_independence(
                 data, z_a, outcome, z_b
             )
+            # Test (i.a): X ⊥̸ Z_a | Z_b — instrument relevance (should reject)
+            test_ia = self.test_conditional_independence(
+                data, treatment, z_a, z_b
+            )
 
             passes_ehs = (not test_i['reject_independence']) and test_ii['reject_independence']
+            passes_full_ehs = passes_ehs and test_ia['reject_independence']
             # Use CMI-based scoring (sample-size invariant) instead of p-values
             score = test_ii['cmi'] - test_i['cmi']
+            # Warn if instrument appears weak but score is positive
+            weak_instrument_warning = (test_ia['cmi'] < weak_instrument_threshold) and (score > 0)
 
             return {
                 'z_a': z_a,
@@ -330,19 +347,29 @@ class CITestEngine:
                 'test_ii_cmi': test_ii['cmi'],
                 'test_ii_pvalue': test_ii['p_value'],
                 'test_ii_reject': test_ii['reject_independence'],
+                'test_ia_cmi': test_ia['cmi'],
+                'test_ia_pvalue': test_ia['p_value'],
+                'test_ia_reject': test_ia['reject_independence'],
                 'passes_ehs': passes_ehs,
+                'passes_full_ehs': passes_full_ehs,
+                'weak_instrument_warning': weak_instrument_warning,
                 'score': score
             }
         else:
+            # CMI-only mode (faster, no p-values)
             test_i_cmi = self.compute_cmi_only(data, z_a, outcome, z_b + [treatment])
             test_ii_cmi = self.compute_cmi_only(data, z_a, outcome, z_b)
+            test_ia_cmi = self.compute_cmi_only(data, treatment, z_a, z_b)
 
             cmi_threshold = 0.01
             test_i_reject = test_i_cmi > cmi_threshold
             test_ii_reject = test_ii_cmi > cmi_threshold
+            test_ia_reject = test_ia_cmi > cmi_threshold
 
             passes_ehs = (not test_i_reject) and test_ii_reject
+            passes_full_ehs = passes_ehs and test_ia_reject
             score = test_ii_cmi - test_i_cmi
+            weak_instrument_warning = (test_ia_cmi < weak_instrument_threshold) and (score > 0)
 
             return {
                 'z_a': z_a,
@@ -352,7 +379,12 @@ class CITestEngine:
                 'test_ii_cmi': test_ii_cmi,
                 'test_ii_pvalue': None,
                 'test_ii_reject': test_ii_reject,
+                'test_ia_cmi': test_ia_cmi,
+                'test_ia_pvalue': None,
+                'test_ia_reject': test_ia_reject,
                 'passes_ehs': passes_ehs,
+                'passes_full_ehs': passes_full_ehs,
+                'weak_instrument_warning': weak_instrument_warning,
                 'score': score
             }
 
