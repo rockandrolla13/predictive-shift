@@ -1,0 +1,69 @@
+# Sensitivity Sweep Configuration
+# ================================
+#
+# This file configures parameter sweeps for analyzing the precision-coverage
+# tradeoff in CATE bound estimation.
+#
+# Usage:
+#   python experiments/run_sensitivity_sweep.py --config experiments/configs/sensitivity_sweep.yaml
+
+# Parameter sweep configuration
+sweep:
+  # Parameter to sweep (currently supports: epsilon, transfer_method)
+  parameter: epsilon
+
+  # Option 1: Explicit values
+  values: [0.01, 0.05, 0.10, 0.15, 0.20, 0.30, 0.50]
+
+  # Option 2: Auto-generate values (uncomment to use)
+  # n_points: 20
+  # range: [0.01, 0.5]
+  # log_scale: false
+
+# Base estimator parameters (fixed during sweep)
+base_estimator:
+  transfer_method: conservative
+  n_permutations: 500
+  discretize: true
+  age_bins: 5
+  use_full_lp: false
+
+# Experiment configuration
+experiment:
+  # ManyLabs study to use
+  study: anchoring1
+
+  # Confounding strength (beta value)
+  beta: 0.25
+
+  # Which site to hold out as target
+  target_site: mturk
+
+  # Random seed for reproducibility
+  random_seed: 42
+
+# Output configuration
+output:
+  # Directory for results (relative to project root)
+  output_dir: results/sensitivity/
+
+  # Save detailed bounds for each configuration
+  save_all_bounds: false
+
+  # Generate plots
+  plot_pareto: true
+  plot_coverage_curve: true
+  plot_width_curve: true
+
+  # Save summary JSON
+  save_summary: true
+
+# Optional: Ground truth configuration
+# If not specified, coverage will not be computed
+ground_truth:
+  # Source of ground truth CATE values
+  # Options: 'rct' (compute from RCT data), 'file' (load from file)
+  source: rct
+
+  # For source='file', specify path
+  # path: results/ground_truth_cate.csv

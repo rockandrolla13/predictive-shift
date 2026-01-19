@@ -103,6 +103,7 @@ print(bounds_df[['z', 'cate_lower', 'cate_upper', 'width']])
 | `experiments/integration_test.py` | End-to-end pipeline validation (7 tests) |
 | `experiments/compare_to_baselines.py` | Compare bounds to baseline causal methods |
 | `experiments/validate_cate_coverage.py` | Validate CATE bounds against RCT ground truth |
+| `experiments/run_sensitivity_sweep.py` | Parameter sensitivity analysis (epsilon sweep) |
 
 ### Running Experiments
 
@@ -118,6 +119,46 @@ python experiments/integration_test.py --study anchoring1 --beta 0.1
 
 # CATE coverage validation
 python experiments/validate_cate_coverage.py --study anchoring1 --beta 0.1
+
+# Epsilon sensitivity sweep
+python experiments/run_sensitivity_sweep.py --study anchoring1 --beta 0.25 --output results/sensitivity/
+```
+
+### Sensitivity Analysis
+
+The module includes tools for analyzing parameter sensitivity to characterize the precision-coverage tradeoff:
+
+```python
+from causal_grounding import SweepConfig, SensitivityAnalyzer
+
+# Configure epsilon sweep
+config = SweepConfig(
+    parameter_name='epsilon',
+    values=[0.01, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5]
+)
+
+# Run sweep
+analyzer = SensitivityAnalyzer(
+    sweep_config=config,
+    base_estimator_params={'transfer_method': 'conservative'}
+)
+
+results = analyzer.run_sweep(
+    training_data=training_data,
+    ground_truth=true_cates  # For coverage computation
+)
+
+# Get recommended epsilon for 50% coverage target
+print(results.get_recommended_epsilon(target_coverage=0.5))
+
+# Generate Pareto plot
+analyzer.plot_results(output_dir='results/sensitivity/')
+```
+
+Or via YAML configuration:
+
+```bash
+python experiments/run_sensitivity_sweep.py --config experiments/configs/sensitivity_sweep.yaml
 ```
 
 ### Test Suite
@@ -134,6 +175,7 @@ pytest tests/test_causal_grounding/ -v
 - `test_lp_solver.py` - 21 tests for LP bounds
 - `test_train_target_split.py` - 19 tests for environment splitting
 - `test_transfer.py` - 33 tests for bound transfer
+- `test_sensitivity.py` - Tests for parameter sensitivity analysis
 
 ---
 

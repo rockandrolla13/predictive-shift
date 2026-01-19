@@ -205,6 +205,219 @@ def solve_cate_bounds_lp(
     )
 
 
+# =============================================================================
+# TRUE LP BOUNDS FOR BINARY OUTCOMES
+# =============================================================================
+
+def _solve_lp_binary_cvxpy(
+    theta_1_values: List[float],
+    theta_0_values: List[float],
+    epsilon: float
+) -> Tuple[float, float, str]:
+    """
+    CVXPY formulation for binary outcome CATE bounds.
+
+    Solves:
+        min/max θ₁ - θ₀
+        s.t.  0 ≤ θₓ ≤ 1
+              |θₓ - θₓᵏ| ≤ ε  for all training sites k
+
+    Args:
+        theta_1_values: P(Y=1|X=1,Z) from each training site
+        theta_0_values: P(Y=1|X=0,Z) from each training site
+        epsilon: Naturalness tolerance
+
+    Returns:
+        (cate_lower, cate_upper, status)
+    """
+    if not HAS_CVXPY:
+        raise ImportError("CVXPY required for LP solver. Install with: pip install cvxpy")
+
+    theta_1 = cp.Variable()
+    theta_0 = cp.Variable()
+
+    constraints = [
+        theta_1 >= 0, theta_1 <= 1,
+        theta_0 >= 0, theta_0 <= 1,
+    ]
+
+    # Naturalness: |θ - θᵏ| ≤ ε for each training site
+    for t1 in theta_1_values:
+        constraints.append(theta_1 >= t1 - epsilon)
+        constraints.append(theta_1 <= t1 + epsilon)
+    for t0 in theta_0_values:
+        constraints.append(theta_0 >= t0 - epsilon)
+        constraints.append(theta_0 <= t0 + epsilon)
+
+    # Solve for lower bound
+    prob_lower = cp.Problem(cp.Minimize(theta_1 - theta_0), constraints)
+    prob_lower.solve(solver=cp.ECOS)
+    if prob_lower.status in ['optimal', 'optimal_inaccurate']:
+        lower = float(prob_lower.value)
+    else:
+        lower = float('nan')
+
+    # Solve for upper bound
+    prob_upper = cp.Problem(cp.Maximize(theta_1 - theta_0), constraints)
+    prob_upper.solve(solver=cp.ECOS)
+    if prob_upper.status in ['optimal', 'optimal_inaccurate']:
+        upper = float(prob_upper.value)
+    else:
+        upper = float('nan')
+
+    return lower, upper, 'cvxpy'
+
+
+def solve_cate_bounds_lp_binary(
+    z_value: Tuple,
+    training_identified: Dict[str, Dict[Tuple, float]],
+    epsilon: float = 0.1,
+    use_cvxpy: bool = False
+) -> Tuple[float, float, str]:
+    """
+    Solve LP bounds for binary outcome CATE at a single z value.
+
+    For binary Y ∈ {0,1}, uses naturalness constraints:
+        |θₓ(z) - θₓᵏ(z)| ≤ ε for all training sites k
+
+    where θₓᵏ(z) = P(Y=1|X=x,Z=z,F=on) is identified from site k.
+
+    Closed-form solution (when constraints don't conflict):
+        CATE_lower = min_k{θ₁ᵏ} - max_k{θ₀ᵏ} - 2ε
+        CATE_upper = max_k{θ₁ᵏ} - min_k{θ₀ᵏ} + 2ε
+
+    Args:
+        z_value: Tuple of covariate values
+        training_identified: Dict[site_id -> Dict[(x, z) -> P(Y=1|X=x,Z=z)]]
+        epsilon: Naturalness tolerance (probability units for binary Y)
+        use_cvxpy: Use CVXPY solver (True) or closed-form (False)
+
+    Returns:
+        (cate_lower, cate_upper, status)
+    """
+    # Collect identified quantities from each training site
+    theta_1_values = []  # P(Y=1|X=1,Z=z) from each site
+    theta_0_values = []  # P(Y=1|X=0,Z=z) from each site
+
+    for site_id, site_identified in training_identified.items():
+        if (1, z_value) in site_identified:
+            theta_1_values.append(site_identified[(1, z_value)])
+        if (0, z_value) in site_identified:
+            theta_0_values.append(site_identified[(0, z_value)])
+
+    if not theta_1_values or not theta_0_values:
+        return float('nan'), float('nan'), 'missing_data'
+
+    if use_cvxpy:
+        return _solve_lp_binary_cvxpy(theta_1_values, theta_0_values, epsilon)
+
+    # Closed-form solution
+    theta_1_min, theta_1_max = min(theta_1_values), max(theta_1_values)
+    theta_0_min, theta_0_max = min(theta_0_values), max(theta_0_values)
+
+    # Check if naturalness constraints are satisfiable
+    # For θ₁: intersection of [θ₁ᵏ - ε, θ₁ᵏ + ε] for all k
+    theta_1_lower_bound = max(0.0, max(t - epsilon for t in theta_1_values))
+    theta_1_upper_bound = min(1.0, min(t + epsilon for t in theta_1_values))
+
+    theta_0_lower_bound = max(0.0, max(t - epsilon for t in theta_0_values))
+    theta_0_upper_bound = min(1.0, min(t + epsilon for t in theta_0_values))
+
+    # Check feasibility
+    if theta_1_lower_bound > theta_1_upper_bound or theta_0_lower_bound > theta_0_upper_bound:
+        return float('nan'), float('nan'), 'infeasible'
+
+    # Lower bound on CATE: minimize θ₁ - θ₀
+    # = minimize θ₁ + maximize (-θ₀) = min θ₁ - max θ₀
+    cate_lower = theta_1_lower_bound - theta_0_upper_bound
+
+    # Upper bound on CATE: maximize θ₁ - θ₀
+    # = maximize θ₁ + minimize (-θ₀) = max θ₁ - min θ₀
+    cate_upper = theta_1_upper_bound - theta_0_lower_bound
+
+    # Clamp to valid CATE range for binary outcomes
+    cate_lower = max(-1.0, cate_lower)
+    cate_upper = min(1.0, cate_upper)
+
+    return cate_lower, cate_upper, 'closed_form'
+
+
+def solve_all_bounds_binary_lp(
+    training_data: Dict[str, pd.DataFrame],
+    covariates: List[str],
+    treatment: str,
+    outcome: str,
+    epsilon: float = 0.1,
+    regime_col: str = 'F',
+    use_cvxpy: bool = False,
+    ehs_filter: Optional[Dict[str, bool]] = None
+) -> Dict[Tuple, Tuple]:
+    """
+    Solve LP bounds for binary outcomes across all training sites.
+
+    Unlike solve_all_bounds which returns per-site bounds, this function
+    uses all sites jointly to compute tighter bounds via naturalness.
+
+    Args:
+        training_data: Dict[site_id -> DataFrame with F column]
+        covariates: Covariate column names
+        treatment: Treatment column
+        outcome: Outcome column (must be binary 0/1)
+        epsilon: Naturalness tolerance
+        regime_col: Regime indicator column
+        use_cvxpy: Use CVXPY solver or closed-form
+        ehs_filter: Optional Dict[site_id -> passes_ehs] to filter sites
+
+    Returns:
+        {z_value: (lower, upper)} - bounds combining all training sites
+    """
+    # Filter sites by EHS if provided
+    if ehs_filter is not None:
+        filtered_sites = {s: d for s, d in training_data.items()
+                         if ehs_filter.get(s, False)}
+        if len(filtered_sites) < 2:
+            # Fall back to all sites with warning
+            import warnings
+            warnings.warn(f"Only {len(filtered_sites)} sites pass EHS filter, using all sites")
+            filtered_sites = training_data
+    else:
+        filtered_sites = training_data
+
+    # Collect identified quantities from F=on data for each site
+    training_identified = {}
+    all_z_values = set()
+
+    for site_id, site_data in filtered_sites.items():
+        on_data = site_data[site_data[regime_col] == 'on']
+
+        if len(on_data) < 10:
+            continue
+
+        site_identified = estimate_conditional_means(
+            on_data, treatment, outcome, covariates, min_count=5
+        )
+        if site_identified:
+            training_identified[site_id] = site_identified
+            # Collect z values
+            for (x, z) in site_identified.keys():
+                all_z_values.add(z)
+
+    if not training_identified:
+        return {}
+
+    # Solve bounds for each z value
+    bounds = {}
+
+    for z_value in all_z_values:
+        lower, upper, status = solve_cate_bounds_lp_binary(
+            z_value, training_identified, epsilon, use_cvxpy
+        )
+        if not np.isnan(lower) and not np.isnan(upper):
+            bounds[z_value] = (lower, upper)
+
+    return bounds
+
+
 def solve_all_bounds(
     training_data: Dict[str, pd.DataFrame],
     covariates: List[str],

@@ -61,6 +61,8 @@ from .lp_solver import (
     solve_all_bounds,
     estimate_identified_probs,
     estimate_observed_probs,
+    solve_cate_bounds_lp_binary,
+    solve_all_bounds_binary_lp,
 )
 
 from .transfer import (
@@ -69,6 +71,13 @@ from .transfer import (
     transfer_bounds_weighted,
     compute_bound_metrics,
     bounds_to_dataframe,
+)
+
+from .sensitivity import (
+    SweepConfig,
+    SweepResults,
+    SensitivityAnalyzer,
+    run_epsilon_sweep,
 )
 
 __all__ = [
@@ -103,6 +112,8 @@ __all__ = [
     'solve_all_bounds',
     'estimate_identified_probs',
     'estimate_observed_probs',
+    'solve_cate_bounds_lp_binary',
+    'solve_all_bounds_binary_lp',
 
     # Transfer
     'transfer_bounds_conservative',
@@ -110,4 +121,10 @@ __all__ = [
     'transfer_bounds_weighted',
     'compute_bound_metrics',
     'bounds_to_dataframe',
+
+    # Sensitivity analysis
+    'SweepConfig',
+    'SweepResults',
+    'SensitivityAnalyzer',
+    'run_epsilon_sweep',
 ]

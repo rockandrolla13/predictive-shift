@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple, Optional, Union
 from .discretize import discretize_covariates, get_discretized_covariate_names
 from .ci_tests import CITestEngine
 from .covariate_scoring import rank_covariates_across_sites, select_best_instrument
-from .lp_solver import solve_all_bounds
+from .lp_solver import solve_all_bounds, solve_all_bounds_binary_lp
 from .transfer import (
     transfer_bounds_conservative,
     transfer_bounds_average,
@@ -51,6 +51,7 @@ class CausalGroundingEstimator:
         discretize: bool = True,
         age_bins: int = 5,
         use_full_lp: bool = False,
+        use_binary_lp: bool = True,
         random_seed: Optional[int] = None,
         verbose: bool = True
     ):
@@ -63,6 +64,7 @@ class CausalGroundingEstimator:
             discretize: Whether to discretize continuous covariates
             age_bins: Number of bins for age discretization
             use_full_lp: Use full LP solver (slower but more accurate)
+            use_binary_lp: Also compute true LP bounds for binary Y (default: True)
             random_seed: Random seed for reproducibility
             verbose: Print progress messages
         """
@@ -73,6 +75,7 @@ class CausalGroundingEstimator:
         self.discretize = discretize
         self.age_bins = age_bins
         self.use_full_lp = use_full_lp
+        self.use_binary_lp = use_binary_lp
         self.random_seed = random_seed
         self.verbose = verbose
 
@@ -84,6 +87,10 @@ class CausalGroundingEstimator:
         self.training_bounds_ = None
         self.transferred_bounds_ = None
         self.ci_engine_ = None
+
+        # Binary LP bounds (if use_binary_lp=True)
+        self.binary_lp_bounds_ = None
+        self.is_binary_outcome_ = None
 
     def _log(self, msg: str):
         if self.verbose:
@@ -154,8 +161,21 @@ class CausalGroundingEstimator:
         )
         self._log(f"  Best instrument: {self.best_instrument_}")
 
-        # Step 4: Solve LP bounds for each training site
-        self._log("  Step 3: Solving LP bounds...")
+        # Store training data reference for binary LP
+        self._training_data_ = training_data
+        self._treatment_ = treatment
+        self._outcome_ = outcome
+        self._regime_col_ = regime_col
+
+        # Check if outcome is binary
+        all_outcomes = []
+        for site_data in training_data.values():
+            all_outcomes.extend(site_data[outcome].dropna().values)
+        unique_outcomes = set(all_outcomes)
+        self.is_binary_outcome_ = unique_outcomes.issubset({0, 1, 0.0, 1.0})
+
+        # Step 4: Solve heuristic bounds for each training site
+        self._log("  Step 3a: Solving heuristic bounds...")
         self.training_bounds_ = solve_all_bounds(
             training_data,
             self.covariates_,
@@ -165,7 +185,25 @@ class CausalGroundingEstimator:
             regime_col=regime_col,
             use_full_lp=self.use_full_lp
         )
-        self._log(f"  Computed bounds for {len(self.training_bounds_)} sites")
+        self._log(f"  Computed heuristic bounds for {len(self.training_bounds_)} sites")
+
+        # Step 4b: Solve binary LP bounds (if enabled and outcome is binary)
+        if self.use_binary_lp:
+            if self.is_binary_outcome_:
+                self._log("  Step 3b: Solving binary LP bounds...")
+                self.binary_lp_bounds_ = solve_all_bounds_binary_lp(
+                    training_data,
+                    self.covariates_,
+                    treatment,
+                    outcome,
+                    epsilon=self.epsilon,
+                    regime_col=regime_col,
+                    use_cvxpy=False  # Use faster closed-form
+                )
+                self._log(f"  Computed LP bounds for {len(self.binary_lp_bounds_)} strata")
+            else:
+                self._log("  Step 3b: Skipping binary LP (outcome is not binary)")
+                self.binary_lp_bounds_ = None
 
         # Step 5: Transfer bounds
         self._log("  Step 4: Transferring bounds...")
@@ -185,7 +223,8 @@ class CausalGroundingEstimator:
         self,
         target_data: Optional[pd.DataFrame] = None,
         z_values: Optional[List[Tuple]] = None,
-        return_dataframe: bool = True
+        return_dataframe: bool = True,
+        method: str = 'heuristic'
     ) -> Union[pd.DataFrame, Dict[Tuple, Tuple]]:
         """
         Predict CATE bounds for target environment.
@@ -194,17 +233,43 @@ class CausalGroundingEstimator:
             target_data: Optional target DataFrame (for z support)
             z_values: Optional specific z values to predict
             return_dataframe: Return DataFrame (True) or dict (False)
+            method: 'heuristic' (default), 'binary_lp', or 'both'
 
         Returns:
             DataFrame with columns: z components, cate_lower, cate_upper, width
             Or dict: {z_value: (lower, upper)}
+            If method='both', returns dict with 'heuristic' and 'binary_lp' keys
         """
         self._check_is_fitted()
 
-        if z_values is None:
-            z_values = list(self.transferred_bounds_.keys())
+        if method == 'both':
+            # Return both bound types
+            result = {
+                'heuristic': self.predict_bounds(
+                    target_data, z_values, return_dataframe, method='heuristic'
+                )
+            }
+            if self.binary_lp_bounds_ is not None:
+                result['binary_lp'] = self.predict_bounds(
+                    target_data, z_values, return_dataframe, method='binary_lp'
+                )
+            return result
 
-        bounds = {z: self.transferred_bounds_.get(z, (-1, 1)) for z in z_values}
+        # Select which bounds to use
+        if method == 'binary_lp':
+            if self.binary_lp_bounds_ is None:
+                raise ValueError(
+                    "Binary LP bounds not available. "
+                    "Either use_binary_lp=False or outcome is not binary."
+                )
+            bounds_source = self.binary_lp_bounds_
+        else:  # heuristic
+            bounds_source = self.transferred_bounds_
+
+        if z_values is None:
+            z_values = list(bounds_source.keys())
+
+        bounds = {z: bounds_source.get(z, (-1, 1)) for z in z_values}
 
         if return_dataframe:
             return bounds_to_dataframe(bounds, self.covariates_)
@@ -214,16 +279,34 @@ class CausalGroundingEstimator:
         """Return fitting diagnostics."""
         self._check_is_fitted()
 
-        metrics = compute_bound_metrics(self.transferred_bounds_)
+        heuristic_metrics = compute_bound_metrics(self.transferred_bounds_)
 
-        return {
+        result = {
             'n_training_sites': len(self.training_bounds_),
             'n_z_values': len(self.transferred_bounds_),
             'best_instrument': self.best_instrument_,
             'epsilon': self.epsilon,
             'transfer_method': self.transfer_method,
-            **metrics
+            'is_binary_outcome': self.is_binary_outcome_,
+            'heuristic_mean_width': heuristic_metrics['mean_width'],
+            'heuristic_median_width': heuristic_metrics['median_width'],
+            **{f'heuristic_{k}': v for k, v in heuristic_metrics.items()
+               if k not in ['mean_width', 'median_width']}
         }
+
+        # Add binary LP metrics if available
+        if self.binary_lp_bounds_ is not None:
+            lp_metrics = compute_bound_metrics(self.binary_lp_bounds_)
+            result['binary_lp_n_z_values'] = lp_metrics['n_z_values']
+            result['binary_lp_mean_width'] = lp_metrics['mean_width']
+            result['binary_lp_median_width'] = lp_metrics['median_width']
+
+            # Width reduction
+            if heuristic_metrics['mean_width'] > 0:
+                reduction = (heuristic_metrics['mean_width'] - lp_metrics['mean_width']) / heuristic_metrics['mean_width']
+                result['width_reduction_pct'] = reduction * 100
+
+        return result
 
     def _check_is_fitted(self):
         if not self.is_fitted_:
