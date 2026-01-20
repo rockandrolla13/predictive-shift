@@ -316,23 +316,30 @@ def create_ci_engine(
     Factory function to create CI testing engine.
 
     Args:
-        method: 'cmi' for CMI-based, 'l1' for L1-regression based
+        method: CI testing method to use
+            - 'cmi': CMI-based with permutation testing (default)
+            - 'l1': L1-regularized regression
+            - 'loco': Leave-One-Covariate-Out predictive comparison
         **kwargs: Arguments passed to engine constructor
 
     Returns:
-        CITestEngine or L1RegressionCIEngine instance
+        CITestEngine, L1RegressionCIEngine, or LOCOCIEngine instance
 
     Example:
-        engine = create_ci_engine('l1', alpha=0.1)
         engine = create_ci_engine('cmi', n_permutations=1000)
+        engine = create_ci_engine('l1', alpha=0.1)
+        engine = create_ci_engine('loco', function_class='gbm')
     """
     if method == 'cmi':
         from .ci_tests import CITestEngine
         return CITestEngine(**kwargs)
     elif method == 'l1':
         return L1RegressionCIEngine(**kwargs)
+    elif method == 'loco':
+        from .ci_tests_loco import LOCOCIEngine
+        return LOCOCIEngine(**kwargs)
     else:
-        raise ValueError(f"Unknown method: {method}. Use 'cmi' or 'l1'.")
+        raise ValueError(f"Unknown method: {method}. Use 'cmi', 'l1', or 'loco'.")
 
 
 # Module test
