@@ -41,6 +41,13 @@ from .ci_tests_l1 import (
     create_ci_engine,
 )
 
+# LOCO CI testing (optional - requires group-lasso for lasso function class)
+try:
+    from .ci_tests_loco import LOCOCIEngine
+    _LOCO_AVAILABLE = True
+except ImportError:
+    _LOCO_AVAILABLE = False
+
 from .predictors import (
     BasePredictorModel,
     EmpiricalPredictor,
@@ -191,6 +198,9 @@ __all__ = [
     # L1-Regression CI testing
     'L1RegressionCIEngine',
     'create_ci_engine',
+
+    # LOCO CI testing (optional)
+    'LOCOCIEngine',
 
     # Prediction models
     'BasePredictorModel',
