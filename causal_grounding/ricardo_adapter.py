@@ -4,7 +4,7 @@ Ricardo Method Adapter
 This module provides an adapter to run Ricardo's original implementation
 for comparison with our production causal_grounding code.
 
-The adapter wraps Ricardo's code from the 'Ricardo Code/' directory
+The adapter wraps Ricardo's code from the 'ricardo_code/' directory
 and exposes it through a consistent interface.
 
 Note: Ricardo's code requires xgboost, multipledispatch, and sklearn.
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 
 # Path to Ricardo's code directory (relative to this file)
-RICARDO_CODE_PATH = Path(__file__).parent.parent / 'Ricardo Code'
+RICARDO_CODE_PATH = Path(__file__).parent.parent / 'ricardo_code'
 
 
 @dataclass
