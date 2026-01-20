@@ -103,6 +103,7 @@ print(bounds_df[['z', 'cate_lower', 'cate_upper', 'width']])
 | `experiments/compare_ci_engines.py` | Compare CMI vs L1-Regression CI testing |
 | `experiments/multi_instrument.py` | Multi-instrument aggregation analysis |
 | `experiments/loco_vs_cmi.py` | LOCO vs CMI statistical comparison |
+| `experiments/ehs_instrument_validity_experiment.py` | EHS instrument validity under realistic confounding |
 | `experiments/compare_to_baselines.py` | Compare bounds to baseline causal methods |
 | `experiments/validate_cate_coverage.py` | Validate CATE bounds against RCT ground truth |
 | `experiments/run_sensitivity_sweep.py` | Parameter sensitivity analysis (epsilon sweep) |
