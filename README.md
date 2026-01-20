@@ -48,11 +48,20 @@ causal_grounding/
 ├── __init__.py            # Public API exports
 ├── estimator.py           # CausalGroundingEstimator class
 ├── ci_tests.py            # Conditional independence testing (CMI)
+├── ci_tests_loco.py       # LOCO-based CI testing
+├── ci_tests_l1.py         # L1-regression CI testing
 ├── lp_solver.py           # Linear programming for bounds
+├── lp_solver_extended.py  # Extended LP with sensitivity
 ├── covariate_scoring.py   # EHS criteria for instrument selection
 ├── discretize.py          # Covariate discretization
 ├── train_target_split.py  # Environment splitting
-└── transfer.py            # Bound transfer methods
+├── transfer.py            # Bound transfer methods
+├── ricardo_adapter.py     # Adapter for Ricardo's methods
+└── evaluation.py          # Coverage and informativeness metrics
+
+ricardo_code/              # Ricardo's contributed utilities
+├── simulator.py           # XGBoost backdoor models, Monte Carlo CATE
+└── method.ipynb           # Causal discovery grounding notebook
 ```
 
 ### Quick Example
