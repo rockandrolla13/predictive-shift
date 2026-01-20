@@ -22,11 +22,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy import stats
 import time
 from pathlib import Path
 from tqdm import tqdm
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -49,18 +48,19 @@ from causal_grounding.confounded_instrument_dgp import (
 # CONFIGURATION
 # =============================================================================
 
-OUTPUT_DIR = Path(__file__).parent / 'experiment_results' / 'ehs_instrument_validity'
-FIGURES_DIR = OUTPUT_DIR
+OUTPUT_DIR = Path(__file__).parent.parent / 'results' / 'ehs_instrument_validity'
 
 # Experiment parameters
 N_REPLICATIONS = 200  # Number of datasets per condition
 SAMPLE_SIZES = [500, 1000, 2000]
 ALPHA = 0.05  # Significance level
 
+# Plot styling
+COLORS = {'CMI': '#1f77b4', 'LOCO': '#ff7f0e'}
+
 # Scenario parameters
 INSTRUMENT_STRENGTHS = [0.1, 0.3, 0.5, 1.0]  # alpha_z values
 DIRECT_EFFECTS = [0.0, 0.2, 0.5]  # beta_z values (0 = valid, >0 = invalid)
-CONFOUNDING_STRENGTHS = [0.5, 1.0]
 
 # Set style
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -102,134 +102,97 @@ def run_ehs_test_on_data(
     return result
 
 
-def run_scenario_1_valid_instrument(
+def run_scenario(
     engine,
+    scenario_num: int,
+    dgp_factory,
     n_samples: int,
-    alpha_z: float,
     n_replications: int,
-    method_name: str
+    method_name: str,
+    extra_fields: Dict[str, Any],
+    desc_suffix: str = ""
 ) -> List[Dict]:
+    """
+    Generic scenario runner for scenarios 1-3.
+
+    Args:
+        engine: CI test engine (CMI or LOCO)
+        scenario_num: Scenario number (1, 2, or 3)
+        dgp_factory: Callable that returns a DGP instance
+        n_samples: Number of samples per dataset
+        n_replications: Number of replications
+        method_name: Name of the method ('CMI' or 'LOCO')
+        extra_fields: Additional fields to include in results
+        desc_suffix: Suffix for tqdm description
+    """
+    SCENARIO_NAMES = {1: 'Valid Instrument', 2: 'Exclusion Violated', 3: 'Weak Instrument'}
+
+    results = []
+    dgp = dgp_factory()
+    ground_truth = compute_ground_truth_effects(dgp)
+
+    for rep in tqdm(range(n_replications), desc=f"  {method_name} S{scenario_num}{desc_suffix}", leave=False):
+        data = generate_confounded_instrument_data(dgp, n_samples, seed=rep)
+
+        try:
+            ehs_result = run_ehs_test_on_data(
+                engine, data,
+                instrument='Z',
+                treatment='X',
+                outcome='Y',
+                other_covariates=[]
+            )
+
+            results.append({
+                'scenario': scenario_num,
+                'scenario_name': SCENARIO_NAMES[scenario_num],
+                'method': method_name,
+                'n_samples': n_samples,
+                'replication': rep,
+                'ground_truth_ate': ground_truth['ate'],
+                **extra_fields,
+                **{f'ehs_{k}': v for k, v in ehs_result.items() if k != 'z_a'}
+            })
+        except Exception as e:
+            print(f"  Error in S{scenario_num} rep {rep}: {e}")
+
+    return results
+
+
+def run_scenario_1_valid_instrument(engine, n_samples: int, alpha_z: float,
+                                     n_replications: int, method_name: str) -> List[Dict]:
     """Run Scenario 1: Valid Instrument tests."""
-    results = []
-
-    dgp = create_scenario_1_valid_instrument(alpha_z=alpha_z)
-    ground_truth = compute_ground_truth_effects(dgp)
-
-    for rep in tqdm(range(n_replications), desc=f"  {method_name} S1 (alpha_z={alpha_z})", leave=False):
-        data = generate_confounded_instrument_data(dgp, n_samples, seed=rep)
-
-        try:
-            ehs_result = run_ehs_test_on_data(
-                engine, data,
-                instrument='Z',
-                treatment='X',
-                outcome='Y',
-                other_covariates=[]
-            )
-
-            results.append({
-                'scenario': 1,
-                'scenario_name': 'Valid Instrument',
-                'method': method_name,
-                'n_samples': n_samples,
-                'alpha_z': alpha_z,
-                'beta_z': 0.0,
-                'replication': rep,
-                'is_valid_instrument': True,  # Ground truth
-                'ground_truth_ate': ground_truth['ate'],
-                **{f'ehs_{k}': v for k, v in ehs_result.items() if k != 'z_a'}
-            })
-        except Exception as e:
-            print(f"  Error in S1 rep {rep}: {e}")
-
-    return results
+    return run_scenario(
+        engine, 1,
+        lambda: create_scenario_1_valid_instrument(alpha_z=alpha_z),
+        n_samples, n_replications, method_name,
+        {'alpha_z': alpha_z, 'beta_z': 0.0, 'is_valid_instrument': True},
+        f" (alpha_z={alpha_z})"
+    )
 
 
-def run_scenario_2_exclusion_violated(
-    engine,
-    n_samples: int,
-    beta_z: float,
-    n_replications: int,
-    method_name: str
-) -> List[Dict]:
+def run_scenario_2_exclusion_violated(engine, n_samples: int, beta_z: float,
+                                       n_replications: int, method_name: str) -> List[Dict]:
     """Run Scenario 2: Invalid Instrument (exclusion violated) tests."""
-    results = []
-
-    dgp = create_scenario_2_exclusion_violated(beta_z=beta_z)
-    ground_truth = compute_ground_truth_effects(dgp)
-
-    for rep in tqdm(range(n_replications), desc=f"  {method_name} S2 (beta_z={beta_z})", leave=False):
-        data = generate_confounded_instrument_data(dgp, n_samples, seed=rep)
-
-        try:
-            ehs_result = run_ehs_test_on_data(
-                engine, data,
-                instrument='Z',
-                treatment='X',
-                outcome='Y',
-                other_covariates=[]
-            )
-
-            results.append({
-                'scenario': 2,
-                'scenario_name': 'Exclusion Violated',
-                'method': method_name,
-                'n_samples': n_samples,
-                'alpha_z': 1.0,  # Default strength
-                'beta_z': beta_z,
-                'replication': rep,
-                'is_valid_instrument': beta_z == 0.0,  # Ground truth
-                'ground_truth_ate': ground_truth['ate'],
-                **{f'ehs_{k}': v for k, v in ehs_result.items() if k != 'z_a'}
-            })
-        except Exception as e:
-            print(f"  Error in S2 rep {rep}: {e}")
-
-    return results
+    return run_scenario(
+        engine, 2,
+        lambda: create_scenario_2_exclusion_violated(beta_z=beta_z),
+        n_samples, n_replications, method_name,
+        {'alpha_z': 1.0, 'beta_z': beta_z, 'is_valid_instrument': beta_z == 0.0},
+        f" (beta_z={beta_z})"
+    )
 
 
-def run_scenario_3_weak_instrument(
-    engine,
-    n_samples: int,
-    alpha_z: float,
-    n_replications: int,
-    method_name: str
-) -> List[Dict]:
+def run_scenario_3_weak_instrument(engine, n_samples: int, alpha_z: float,
+                                    n_replications: int, method_name: str) -> List[Dict]:
     """Run Scenario 3: Weak Instrument tests."""
-    results = []
-
-    dgp = create_scenario_3_weak_instrument(alpha_z=alpha_z)
-    ground_truth = compute_ground_truth_effects(dgp)
-
-    for rep in tqdm(range(n_replications), desc=f"  {method_name} S3 (alpha_z={alpha_z})", leave=False):
-        data = generate_confounded_instrument_data(dgp, n_samples, seed=rep)
-
-        try:
-            ehs_result = run_ehs_test_on_data(
-                engine, data,
-                instrument='Z',
-                treatment='X',
-                outcome='Y',
-                other_covariates=[]
-            )
-
-            results.append({
-                'scenario': 3,
-                'scenario_name': 'Weak Instrument',
-                'method': method_name,
-                'n_samples': n_samples,
-                'alpha_z': alpha_z,
-                'beta_z': 0.0,
-                'replication': rep,
-                'is_valid_instrument': True,  # Valid but weak
-                'is_weak_instrument': alpha_z < 0.3,  # Ground truth
-                'ground_truth_ate': ground_truth['ate'],
-                **{f'ehs_{k}': v for k, v in ehs_result.items() if k != 'z_a'}
-            })
-        except Exception as e:
-            print(f"  Error in S3 rep {rep}: {e}")
-
-    return results
+    return run_scenario(
+        engine, 3,
+        lambda: create_scenario_3_weak_instrument(alpha_z=alpha_z),
+        n_samples, n_replications, method_name,
+        {'alpha_z': alpha_z, 'beta_z': 0.0, 'is_valid_instrument': True, 'is_weak_instrument': alpha_z < 0.3},
+        f" (alpha_z={alpha_z})"
+    )
 
 
 def run_scenario_4_confounder_vs_instrument(
@@ -390,176 +353,305 @@ def compute_test_performance(results_df: pd.DataFrame) -> pd.DataFrame:
 # VISUALIZATION
 # =============================================================================
 
-def plot_scenario_1_results(results_df: pd.DataFrame, output_path: Path):
-    """Plot Scenario 1: Valid instrument detection by strength."""
+def plot_by_method(ax, df: pd.DataFrame, groupby_col: str, value_col: str,
+                   marker: str = 'o', linewidth: float = 2.5, markersize: int = 8):
+    """Plot grouped data by method with consistent CMI vs LOCO styling."""
+    for method in ['CMI', 'LOCO']:
+        if method in df['method'].values:
+            data = df[df['method'] == method].groupby(groupby_col)[value_col].mean()
+            ax.plot(data.index, data.values, marker=marker, label=method,
+                   linewidth=linewidth, markersize=markersize, color=COLORS.get(method))
+
+
+def plot_scenario_1_results(results_df: pd.DataFrame, output_dir: Path):
+    """Plot Scenario 1: Valid instrument detection by strength - multiple plots."""
     s1 = results_df[results_df['scenario'] == 1]
     if len(s1) == 0:
         print("  No Scenario 1 results to plot")
         return
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    # Plot 1: All three EHS tests power curves
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
-    # Plot 1: Test (i) rejection rate by instrument strength (should be low)
     ax1 = axes[0]
-    for method in s1['method'].unique():
-        method_data = s1[s1['method'] == method].groupby('alpha_z')['ehs_test_i_reject'].mean()
-        ax1.plot(method_data.index, method_data.values, marker='o', label=method, linewidth=2)
-    ax1.axhline(y=ALPHA, color='red', linestyle='--', label=f'Nominal alpha={ALPHA}')
-    ax1.set_xlabel('Instrument Strength (alpha_z)')
-    ax1.set_ylabel('Test (i) Rejection Rate')
-    ax1.set_title('Exogeneity Test (Should NOT Reject for Valid)')
-    ax1.legend()
+    plot_by_method(ax1, s1, 'alpha_z', 'ehs_test_i_reject')
+    ax1.axhline(y=ALPHA, color='red', linestyle='--', linewidth=2, label=f'Nominal α={ALPHA}')
+    ax1.axhspan(0.03, 0.07, color='green', alpha=0.1, label='Acceptable range')
+    ax1.set_xlabel('Instrument Strength (α_z)', fontsize=12)
+    ax1.set_ylabel('Rejection Rate', fontsize=12)
+    ax1.set_title('Test (i): Exogeneity [Y ⊥ Z | X]\n(Should NOT reject)', fontsize=11)
+    ax1.legend(loc='upper right')
+    ax1.set_ylim(0, 0.25)
     ax1.grid(True, alpha=0.3)
 
-    # Plot 2: Test (i.a) rejection rate by instrument strength (power)
     ax2 = axes[1]
-    for method in s1['method'].unique():
-        method_data = s1[s1['method'] == method].groupby('alpha_z')['ehs_test_ia_reject'].mean()
-        ax2.plot(method_data.index, method_data.values, marker='o', label=method, linewidth=2)
-    ax2.axhline(y=0.8, color='green', linestyle='--', label='80% Power')
-    ax2.set_xlabel('Instrument Strength (alpha_z)')
-    ax2.set_ylabel('Test (i.a) Rejection Rate')
-    ax2.set_title('Instrument Relevance Test (Power)')
-    ax2.legend()
+    plot_by_method(ax2, s1, 'alpha_z', 'ehs_test_ia_reject')
+    ax2.axhline(y=0.80, color='green', linestyle='--', linewidth=2, label='80% Power')
+    ax2.axhline(y=ALPHA, color='red', linestyle='--', linewidth=1.5, alpha=0.5)
+    ax2.set_xlabel('Instrument Strength (α_z)', fontsize=12)
+    ax2.set_ylabel('Power (Rejection Rate)', fontsize=12)
+    ax2.set_title('Test (i.a): Instrument Relevance [X ⊥̸ Z]\n(Power curve)', fontsize=11)
+    ax2.legend(loc='lower right')
+    ax2.set_ylim(0, 1.05)
     ax2.grid(True, alpha=0.3)
 
-    # Plot 3: Full EHS pass rate
     ax3 = axes[2]
-    for method in s1['method'].unique():
-        method_data = s1[s1['method'] == method].groupby('alpha_z')['ehs_passes_full_ehs'].mean()
-        ax3.plot(method_data.index, method_data.values, marker='o', label=method, linewidth=2)
-    ax3.set_xlabel('Instrument Strength (alpha_z)')
-    ax3.set_ylabel('Pass Rate')
-    ax3.set_title('Full EHS Pass Rate (Valid Instruments)')
+    plot_by_method(ax3, s1, 'alpha_z', 'ehs_passes_full_ehs', marker='s')
+    ax3.set_xlabel('Instrument Strength (α_z)', fontsize=12)
+    ax3.set_ylabel('Pass Rate', fontsize=12)
+    ax3.set_title('Full EHS Pass Rate\n(All 3 tests pass)', fontsize=11)
     ax3.set_ylim(0, 1.05)
-    ax3.legend()
+    ax3.legend(loc='lower right')
     ax3.grid(True, alpha=0.3)
 
-    plt.suptitle('Scenario 1: Valid Instrument Detection', fontsize=14, y=1.02)
+    plt.suptitle('Scenario 1: Valid Instrument - CMI vs LOCO Power Curves', fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    path1 = output_dir / 'scenario1_valid_instrument_cmi_vs_loco_power_curves.png'
+    plt.savefig(path1, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  Saved: {output_path}")
+    print(f"  Saved: {path1.name}")
+
+    # Plot 2: Test (ii) outcome relevance power curve
+    fig, ax = plt.subplots(figsize=(10, 6))
+    plot_by_method(ax, s1, 'alpha_z', 'ehs_test_ii_reject', markersize=10)
+    ax.axhline(y=0.80, color='green', linestyle='--', linewidth=2, label='80% Power')
+    ax.axhline(y=ALPHA, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label=f'α={ALPHA}')
+    ax.set_xlabel('Instrument Strength (α_z)', fontsize=13)
+    ax.set_ylabel('Power (Rejection Rate)', fontsize=13)
+    ax.set_title('Test (ii): Outcome Relevance [Y ⊥̸ Z] - CMI vs LOCO\n(Detecting indirect effect Z → X → Y)', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=11)
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path2 = output_dir / 'scenario1_valid_instrument_cmi_vs_loco_outcome_relevance_power.png'
+    plt.savefig(path2, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {path2.name}")
 
 
-def plot_scenario_2_results(results_df: pd.DataFrame, output_path: Path):
+def plot_scenario_2_results(results_df: pd.DataFrame, output_dir: Path):
     """Plot Scenario 2: Invalid instrument (exclusion violated) detection."""
     s2 = results_df[results_df['scenario'] == 2]
     if len(s2) == 0:
         print("  No Scenario 2 results to plot")
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     # Plot 1: Test (i) rejection rate by direct effect (should increase)
     ax1 = axes[0]
-    for method in s2['method'].unique():
-        method_data = s2[s2['method'] == method].groupby('beta_z')['ehs_test_i_reject'].mean()
-        ax1.plot(method_data.index, method_data.values, marker='o', label=method, linewidth=2)
-    ax1.axhline(y=ALPHA, color='red', linestyle='--', label=f'Nominal alpha={ALPHA}')
-    ax1.set_xlabel('Direct Effect on Y (beta_z)')
-    ax1.set_ylabel('Test (i) Rejection Rate')
-    ax1.set_title('Exogeneity Test (Should Reject When beta_z > 0)')
-    ax1.legend()
+    plot_by_method(ax1, s2, 'beta_z', 'ehs_test_i_reject', markersize=10)
+    ax1.axhline(y=ALPHA, color='red', linestyle='--', linewidth=2, label=f'Type I error (α={ALPHA})')
+    ax1.set_xlabel('Direct Effect of Z on Y (β_z)', fontsize=12)
+    ax1.set_ylabel('Test (i) Rejection Rate', fontsize=12)
+    ax1.set_title('Exogeneity Test Performance\n(Should reject when β_z > 0)', fontsize=12)
+    ax1.legend(loc='upper left')
+    ax1.set_ylim(0, 0.5)
     ax1.grid(True, alpha=0.3)
+    ax1.annotate('β_z = 0: Type I error\nβ_z > 0: Power to detect', xy=(0.25, 0.38), fontsize=10,
+                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
 
-    # Plot 2: Full EHS rejection rate (correctly rejecting invalid instruments)
+    # Plot 2: Correct rejection of invalid instruments
     ax2 = axes[1]
-    # Invalid instruments should fail EHS (passes_full_ehs = False)
-    for method in s2['method'].unique():
-        method_data = s2[s2['method'] == method].groupby('beta_z')['ehs_passes_full_ehs'].mean()
-        # For invalid instruments (beta_z > 0), we want LOW pass rate
-        ax2.plot(method_data.index, 1 - method_data.values, marker='o', label=method, linewidth=2)
-    ax2.set_xlabel('Direct Effect on Y (beta_z)')
-    ax2.set_ylabel('Correct Rejection Rate')
-    ax2.set_title('Invalid Instrument Rejection Rate')
+    for method in ['CMI', 'LOCO']:
+        if method in s2['method'].values:
+            data = s2[s2['method'] == method].groupby('beta_z')['ehs_passes_full_ehs'].mean()
+            ax2.plot(data.index, 1 - data.values, marker='s', label=method,
+                    linewidth=2.5, markersize=10, color=COLORS.get(method, None))
+    ax2.set_xlabel('Direct Effect of Z on Y (β_z)', fontsize=12)
+    ax2.set_ylabel('Correct Rejection Rate', fontsize=12)
+    ax2.set_title('Invalid Instrument Rejection Rate\n(Higher = better detection)', fontsize=12)
     ax2.set_ylim(0, 1.05)
-    ax2.legend()
+    ax2.legend(loc='lower right')
     ax2.grid(True, alpha=0.3)
 
-    plt.suptitle('Scenario 2: Invalid Instrument Detection (Exclusion Violated)', fontsize=14, y=1.02)
+    plt.suptitle('Scenario 2: Exclusion Violation Detection - CMI vs LOCO', fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    path = output_dir / 'scenario2_exclusion_violation_cmi_vs_loco_detection_power.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  Saved: {output_path}")
+    print(f"  Saved: {path.name}")
 
 
-def plot_scenario_4_results(results_df: pd.DataFrame, output_path: Path):
+def plot_scenario_4_results(results_df: pd.DataFrame, output_dir: Path):
     """Plot Scenario 4: Confounder vs Instrument discrimination."""
     s4 = results_df[results_df['scenario'] == 4]
     if len(s4) == 0:
         print("  No Scenario 4 results to plot")
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
-    # Plot 1: EHS pass rate by candidate type
+    # Plot 1: Test (i) rejection by candidate type
     ax1 = axes[0]
-    pass_rates = s4.groupby(['method', 'candidate_type'])['ehs_passes_full_ehs'].mean().unstack()
-    pass_rates.plot(kind='bar', ax=ax1, width=0.7)
-    ax1.set_xlabel('Method')
-    ax1.set_ylabel('EHS Pass Rate')
-    ax1.set_title('EHS Pass Rate by Candidate Type')
-    ax1.set_xticklabels(ax1.get_xticklabels(), rotation=0)
-    ax1.legend(title='Candidate Type')
-    ax1.grid(True, alpha=0.3, axis='y')
-
-    # Plot 2: Test (i) rejection rate comparison
-    ax2 = axes[1]
-    test_i_rates = s4.groupby(['method', 'candidate_type'])['ehs_test_i_reject'].mean().unstack()
-    test_i_rates.plot(kind='bar', ax=ax2, width=0.7)
-    ax2.axhline(y=ALPHA, color='red', linestyle='--', label=f'alpha={ALPHA}')
-    ax2.set_xlabel('Method')
-    ax2.set_ylabel('Test (i) Rejection Rate')
-    ax2.set_title('Exogeneity Test: Instrument Should Pass, Confounder Should Fail')
-    ax2.set_xticklabels(ax2.get_xticklabels(), rotation=0)
-    ax2.legend(title='Candidate Type')
-    ax2.grid(True, alpha=0.3, axis='y')
-
-    plt.suptitle('Scenario 4: Confounder vs Instrument Discrimination', fontsize=14, y=1.02)
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  Saved: {output_path}")
-
-
-def plot_method_comparison(results_df: pd.DataFrame, output_path: Path):
-    """Plot overall method comparison."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-    # Compute accuracy for valid vs invalid classification
-    results_with_validity = results_df[results_df['is_valid_instrument'].notna()].copy()
-
-    # Plot 1: Overall accuracy by method and sample size
-    ax1 = axes[0]
-    accuracy = results_with_validity.groupby(['method', 'n_samples']).apply(
-        lambda g: ((g['is_valid_instrument'] == g['ehs_passes_full_ehs']).sum()) / len(g)
-    ).unstack(level=0)
-    accuracy.plot(kind='bar', ax=ax1, width=0.7)
-    ax1.set_xlabel('Sample Size')
-    ax1.set_ylabel('Classification Accuracy')
-    ax1.set_title('Instrument Classification Accuracy')
-    ax1.set_xticklabels(ax1.get_xticklabels(), rotation=0)
-    ax1.legend(title='Method')
+    test_i_data = s4.groupby(['method', 'candidate_type'])['ehs_test_i_reject'].mean().unstack()
+    x = np.arange(len(test_i_data.index))
+    width = 0.35
+    ax1.bar(x - width/2, test_i_data['Confounder'], width, label='Confounder (W)', color='#d62728')
+    ax1.bar(x + width/2, test_i_data['Instrument'], width, label='Instrument (Z)', color='#2ca02c')
+    ax1.axhline(y=ALPHA, color='black', linestyle='--', linewidth=1.5, label=f'α={ALPHA}')
+    ax1.set_xlabel('Method', fontsize=12)
+    ax1.set_ylabel('Test (i) Rejection Rate', fontsize=12)
+    ax1.set_title('Exogeneity Test [Y ⊥ Z | X]\n(Confounder FAIL, Instrument PASS)', fontsize=11)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(test_i_data.index)
+    ax1.legend()
     ax1.set_ylim(0, 1.05)
     ax1.grid(True, alpha=0.3, axis='y')
 
-    # Plot 2: Runtime comparison
+    # Plot 2: Full EHS pass rate by candidate type
     ax2 = axes[1]
-    runtime = results_df.groupby(['method', 'n_samples'])['ehs_runtime'].mean().unstack(level=0)
-    runtime.plot(kind='bar', ax=ax2, width=0.7)
-    ax2.set_xlabel('Sample Size')
-    ax2.set_ylabel('Runtime (seconds)')
-    ax2.set_title('Mean Runtime per EHS Evaluation')
-    ax2.set_xticklabels(ax2.get_xticklabels(), rotation=0)
-    ax2.legend(title='Method')
+    pass_data = s4.groupby(['method', 'candidate_type'])['ehs_passes_full_ehs'].mean().unstack()
+    ax2.bar(x - width/2, pass_data['Confounder'], width, label='Confounder (W)', color='#d62728')
+    ax2.bar(x + width/2, pass_data['Instrument'], width, label='Instrument (Z)', color='#2ca02c')
+    ax2.set_xlabel('Method', fontsize=12)
+    ax2.set_ylabel('Full EHS Pass Rate', fontsize=12)
+    ax2.set_title('Full EHS Pass Rate\n(Instrument PASS, Confounder FAIL)', fontsize=11)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(pass_data.index)
+    ax2.legend()
+    ax2.set_ylim(0, 1.05)
     ax2.grid(True, alpha=0.3, axis='y')
 
-    plt.suptitle('LOCO vs CMI: EHS Criteria Comparison', fontsize=14, y=1.02)
+    # Plot 3: Discrimination accuracy
+    ax3 = axes[2]
+    accuracy = {}
+    for method in s4['method'].unique():
+        method_df = s4[s4['method'] == method]
+        inst_test_i_pass = 1 - method_df[method_df['candidate_type'] == 'Instrument']['ehs_test_i_reject'].mean()
+        conf_test_i_fail = method_df[method_df['candidate_type'] == 'Confounder']['ehs_test_i_reject'].mean()
+        accuracy[method] = (inst_test_i_pass + conf_test_i_fail) / 2
+    bars = ax3.bar(accuracy.keys(), accuracy.values(), color=[COLORS.get(m, 'gray') for m in accuracy.keys()])
+    ax3.set_xlabel('Method', fontsize=12)
+    ax3.set_ylabel('Discrimination Accuracy', fontsize=12)
+    ax3.set_title('Confounder vs Instrument Discrimination\n(Higher = better separation)', fontsize=11)
+    ax3.set_ylim(0, 1.05)
+    ax3.grid(True, alpha=0.3, axis='y')
+    for bar, val in zip(bars, accuracy.values()):
+        ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                f'{val:.1%}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+    plt.suptitle('Scenario 4: Confounder vs Instrument Discrimination - CMI vs LOCO', fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    path = output_dir / 'scenario4_confounder_vs_instrument_cmi_vs_loco_discrimination.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  Saved: {output_path}")
+    print(f"  Saved: {path.name}")
+
+
+def plot_method_comparison(results_df: pd.DataFrame, output_dir: Path):
+    """Plot overall method comparison - comprehensive summary."""
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+
+    # 1. Runtime comparison
+    ax1 = axes[0, 0]
+    runtime_data = results_df.groupby('method')['ehs_runtime'].agg(['mean', 'std'])
+    bars = ax1.bar(runtime_data.index, runtime_data['mean'],
+                   yerr=runtime_data['std'], capsize=5, color=[COLORS.get(m, 'gray') for m in runtime_data.index])
+    ax1.set_xlabel('Method', fontsize=12)
+    ax1.set_ylabel('Runtime (seconds)', fontsize=12)
+    ax1.set_title('Mean Runtime per EHS Evaluation', fontsize=13, fontweight='bold')
+    ax1.grid(True, alpha=0.3, axis='y')
+    for bar, val in zip(bars, runtime_data['mean']):
+        ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
+                f'{val:.3f}s', ha='center', va='bottom', fontsize=11)
+
+    # 2. Type I error (test i under valid instruments - Scenario 1)
+    ax2 = axes[0, 1]
+    s1 = results_df[results_df['scenario'] == 1]
+    if len(s1) > 0:
+        type1_data = s1.groupby('method')['ehs_test_i_reject'].mean()
+        bars = ax2.bar(type1_data.index, type1_data.values, color=[COLORS.get(m, 'gray') for m in type1_data.index])
+        ax2.axhline(y=ALPHA, color='red', linestyle='--', linewidth=2, label=f'Nominal α={ALPHA}')
+        ax2.axhspan(0.03, 0.07, color='green', alpha=0.2, label='Acceptable range')
+        ax2.set_xlabel('Method', fontsize=12)
+        ax2.set_ylabel('Type I Error Rate', fontsize=12)
+        ax2.set_title('Test (i) Type I Error\n(Valid Instruments - Scenario 1)', fontsize=13, fontweight='bold')
+        ax2.legend(loc='upper right')
+        ax2.set_ylim(0, 0.15)
+        ax2.grid(True, alpha=0.3, axis='y')
+
+    # 3. Confounder detection (Scenario 4)
+    ax3 = axes[1, 0]
+    s4 = results_df[results_df['scenario'] == 4]
+    if len(s4) > 0:
+        conf_detect = s4[s4['candidate_type'] == 'Confounder'].groupby('method')['ehs_test_i_reject'].mean()
+        bars = ax3.bar(conf_detect.index, conf_detect.values, color=[COLORS.get(m, 'gray') for m in conf_detect.index])
+        ax3.set_xlabel('Method', fontsize=12)
+        ax3.set_ylabel('Confounder Detection Rate', fontsize=12)
+        ax3.set_title('Confounder Detection via Test (i)\n(Scenario 4 - Higher = Better)', fontsize=13, fontweight='bold')
+        ax3.set_ylim(0, 1.05)
+        ax3.grid(True, alpha=0.3, axis='y')
+        for bar, val in zip(bars, conf_detect.values):
+            ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f'{val:.1%}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+    # 4. Instrument relevance power (Scenario 1, alpha_z=1.0)
+    ax4 = axes[1, 1]
+    if len(s1) > 0:
+        s1_strong = s1[s1['alpha_z'] == s1['alpha_z'].max()]
+        power_data = s1_strong.groupby('method')['ehs_test_ia_reject'].mean()
+        bars = ax4.bar(power_data.index, power_data.values, color=[COLORS.get(m, 'gray') for m in power_data.index])
+        ax4.axhline(y=0.80, color='green', linestyle='--', linewidth=2, label='80% Power target')
+        ax4.set_xlabel('Method', fontsize=12)
+        ax4.set_ylabel('Power', fontsize=12)
+        ax4.set_title('Test (i.a) Power at Max Instrument Strength\n(Instrument Relevance Detection)', fontsize=13, fontweight='bold')
+        ax4.legend(loc='lower right')
+        ax4.set_ylim(0, 1.05)
+        ax4.grid(True, alpha=0.3, axis='y')
+        for bar, val in zip(bars, power_data.values):
+            ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f'{val:.1%}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+    plt.suptitle('CMI vs LOCO: Overall EHS Criteria Comparison', fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    path = output_dir / 'cmi_vs_loco_overall_ehs_comparison_summary.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {path.name}")
+
+
+def plot_all_power_curves_combined(results_df: pd.DataFrame, output_dir: Path):
+    """Plot all EHS test power curves in a single figure."""
+    s1 = results_df[results_df['scenario'] == 1]
+    if len(s1) == 0:
+        print("  No Scenario 1 data for combined power curves")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+
+    tests = [
+        ('ehs_test_i_reject', 'Test (i): Exogeneity [Y ⊥ Z | X]', 'Type I Error (should be ~5%)', 0.25, True),
+        ('ehs_test_ii_reject', 'Test (ii): Outcome Relevance [Y ⊥̸ Z]', 'Power curve', 1.05, False),
+        ('ehs_test_ia_reject', 'Test (i.a): Instrument Relevance [X ⊥̸ Z]', 'Power curve', 1.05, False),
+        ('ehs_passes_full_ehs', 'Full EHS: All 3 Tests Pass', 'Valid instrument detection rate', 1.05, False)
+    ]
+
+    for idx, (col, title, subtitle, ylim, is_type1) in enumerate(tests):
+        ax = axes[idx // 2, idx % 2]
+        plot_by_method(ax, s1, 'alpha_z', col)
+
+        if is_type1:
+            ax.axhline(y=ALPHA, color='red', linestyle='--', linewidth=2, label=f'α={ALPHA}')
+            ax.axhspan(0.03, 0.07, color='green', alpha=0.1)
+        else:
+            ax.axhline(y=0.80, color='green', linestyle='--', linewidth=2, label='80% Power')
+            ax.axhline(y=ALPHA, color='red', linestyle='--', linewidth=1, alpha=0.5)
+
+        ax.set_xlabel('Instrument Strength (α_z)', fontsize=11)
+        ax.set_ylabel('Rate', fontsize=11)
+        ax.set_title(f'{title}\n({subtitle})', fontsize=11)
+        ax.legend(loc='best')
+        ax.set_ylim(0, ylim)
+        ax.grid(True, alpha=0.3)
+
+    plt.suptitle('CMI vs LOCO: All EHS Test Power Curves (Scenario 1 - Valid Instruments)',
+                fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    path = output_dir / 'cmi_vs_loco_all_ehs_tests_power_curves_combined.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {path.name}")
 
 
 # =============================================================================
@@ -684,10 +776,11 @@ def main():
     print("GENERATING VISUALIZATIONS")
     print("=" * 70)
 
-    plot_scenario_1_results(results_df, OUTPUT_DIR / 'ehs_test_power_by_effect_size.png')
-    plot_scenario_2_results(results_df, OUTPUT_DIR / 'ehs_test_type1_error_calibration.png')
-    plot_scenario_4_results(results_df, OUTPUT_DIR / 'valid_vs_invalid_instrument_separation.png')
-    plot_method_comparison(results_df, OUTPUT_DIR / 'loco_vs_cmi_ehs_overall_comparison.png')
+    plot_scenario_1_results(results_df, OUTPUT_DIR)
+    plot_scenario_2_results(results_df, OUTPUT_DIR)
+    plot_scenario_4_results(results_df, OUTPUT_DIR)
+    plot_method_comparison(results_df, OUTPUT_DIR)
+    plot_all_power_curves_combined(results_df, OUTPUT_DIR)
 
     # Print summary
     print("\n" + "=" * 70)
