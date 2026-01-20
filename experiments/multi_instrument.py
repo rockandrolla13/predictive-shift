@@ -273,7 +273,7 @@ def run_single_dgp_experiment(
 # =============================================================================
 
 def run_multi_instrument_experiment(
-    output_dir: str = 'results/multi_instrument_experiment',
+    output_dir: str = 'results/multi_instrument',
     n_dgps: int = 10,
     n_samples: int = 1000,
     n_covariates: int = 5,
@@ -374,7 +374,7 @@ def run_multi_instrument_experiment(
 
 def generate_multi_instrument_visualizations(
     results: Dict[str, Any],
-    output_dir: str = 'results/multi_instrument_experiment'
+    output_dir: str = 'results/multi_instrument'
 ) -> List[str]:
     """
     Generate visualizations for multi-instrument experiment.
@@ -591,7 +591,7 @@ def generate_multi_instrument_visualizations(
 
 def main():
     """Run the multi-instrument experiment."""
-    output_dir = 'results/multi_instrument_experiment'
+    output_dir = 'results/multi_instrument'
 
     # Run experiment
     results = run_multi_instrument_experiment(

@@ -565,7 +565,7 @@ def run_cate_validation_grid(
     betas: list = None,
     pattern: str = 'age',
     epsilon: float = 0.1,
-    output_dir: str = 'cate_validation_results',
+    output_dir: str = 'results/cate_validation',
     **kwargs
 ) -> pd.DataFrame:
     """
@@ -770,7 +770,7 @@ def main():
         help='Minimum samples per stratum for ground truth'
     )
     parser.add_argument(
-        '--output', type=str, default='cate_validation_results',
+        '--output', type=str, default='results/cate_validation',
         help='Output directory'
     )
     parser.add_argument(

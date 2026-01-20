@@ -9,10 +9,10 @@ Output formats:
 - JSON results for programmatic access
 
 Usage:
-    python experiments/run_grounding_experiment.py --study anchoring1 --beta 0.3
-    python experiments/run_grounding_experiment.py --mode full-grid
-    python experiments/run_grounding_experiment.py --mode figures --results-dir results/
-    python experiments/run_grounding_experiment.py --mode epsilon-sensitivity --study anchoring1
+    python experiments/run_grounding.py --study anchoring1 --beta 0.3
+    python experiments/run_grounding.py --mode full-grid
+    python experiments/run_grounding.py --mode figures --results-dir results/
+    python experiments/run_grounding.py --mode epsilon-sensitivity --study anchoring1
 """
 
 # =============================================================================

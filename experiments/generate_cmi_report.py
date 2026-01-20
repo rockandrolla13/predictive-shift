@@ -15,14 +15,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
 
-from experiments.run_grounding_experiment import (
+from experiments.run_grounding import (
     run_single_experiment,
     plot_forest_bounds,
     save_figure
 )
 
 # Configuration
-OUTPUT_DIR = Path('results/experiment_report_cmi_ranking')
+OUTPUT_DIR = Path('results/reports')
 STUDY = 'anchoring1'
 PATTERNS = ['age', 'gender', 'polideo']
 BETA = 0.25

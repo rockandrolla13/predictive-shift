@@ -99,20 +99,23 @@ print(bounds_df[['z', 'cate_lower', 'cate_upper', 'width']])
 
 | Script | Description |
 |--------|-------------|
-| `experiments/run_grounding_experiment.py` | Full grid experiments with plotting and LaTeX output |
-| `experiments/integration_test.py` | End-to-end pipeline validation (7 tests) |
+| `experiments/run_grounding.py` | Full grid experiments with plotting and LaTeX output |
+| `experiments/compare_ci_engines.py` | Compare CMI vs L1-Regression CI testing |
+| `experiments/multi_instrument.py` | Multi-instrument aggregation analysis |
+| `experiments/loco_vs_cmi.py` | LOCO vs CMI statistical comparison |
 | `experiments/compare_to_baselines.py` | Compare bounds to baseline causal methods |
 | `experiments/validate_cate_coverage.py` | Validate CATE bounds against RCT ground truth |
 | `experiments/run_sensitivity_sweep.py` | Parameter sensitivity analysis (epsilon sweep) |
+| `experiments/integration_test.py` | End-to-end pipeline validation (7 tests) |
 
 ### Running Experiments
 
 ```bash
 # Single experiment
-python experiments/run_grounding_experiment.py --study anchoring1 --beta 0.3
+python experiments/run_grounding.py --study anchoring1 --beta 0.3
 
 # Full grid experiment
-python experiments/run_grounding_experiment.py --grid --output results/
+python experiments/run_grounding.py --grid --output results/
 
 # Integration test
 python experiments/integration_test.py --study anchoring1 --beta 0.1
